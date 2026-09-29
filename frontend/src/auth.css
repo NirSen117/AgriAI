@@ -1,0 +1,5 @@
+.auth-modal { max-width: 420px; }
+.auth-form { display: grid; gap: 16px; }
+.auth-form .primary-button { width: 100%; margin-top: 8px; }
+.auth-error { color: #a43d34; background: #fcebea; border-radius: 7px; font-size: 12px; margin: 0; padding: 10px; }
+.auth-switch { color: #40805f; display: block; font-size: 12px; margin: 18px auto 0; }

@@ -1,0 +1,5 @@
+fastapi>=0.110,<1
+uvicorn[standard]>=0.27,<1
+pydantic>=2.6,<3
+pydantic-settings>=2.2,<3
+google-genai>=1.0,<2

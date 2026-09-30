@@ -308,8 +308,10 @@ def _satellite_unavailable_message(exc: Exception) -> str:
         return f"Bhuvan API request failed with HTTP {exc.code}. Check the API endpoint and token."
     if isinstance(exc, ValueError):
         return f"Bhuvan response could not be read: {exc}"
-    if isinstance(exc, (URLError, TimeoutError)):
-        return "The backend could not reach the Bhuvan API. Check Docker's internet connection and try again."
+    if isinstance(exc, TimeoutError):
+        return "The Bhuvan LULC request timed out. This public service can be slow; try again shortly."
+    if isinstance(exc, URLError):
+        return "The backend could not connect to the Bhuvan API. Check its outbound network access and try again."
     return f"Bhuvan API request failed ({type(exc).__name__}). Check backend logs."
 
 

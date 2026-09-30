@@ -23,7 +23,8 @@ RUN npm run build
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
-    PORT=7860
+    PORT=7860 \
+    PYTHONPATH=/app
 
 WORKDIR /app
 

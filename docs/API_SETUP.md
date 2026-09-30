@@ -10,7 +10,8 @@ No API key is needed to run the deterministic demo. Copy `.env.example` to
 | Gemini assistant, translation, and crop-image triage | `GEMINI_API_KEY` | [Google AI Studio API keys](https://aistudio.google.com/app/apikey) | Model availability, quotas, and data-use terms depend on the Google project and selected model. |
 | Weather and place search | none | [Open-Meteo](https://open-meteo.com/) | No key for non-commercial use; free service has usage limits and attribution terms. Commercial use needs a paid plan/key. |
 | Modelled surface soil moisture | none | [Open-Meteo forecast API](https://open-meteo.com/en/docs) | Same no-key service as weather; model estimate, not a farm sensor reading. |
-| Sentinel-2 field-health NDVI (optional) | `COPERNICUS_CLIENT_ID`, `COPERNICUS_CLIENT_SECRET` | Create an OAuth client in [Copernicus Data Space](https://dataspace.copernicus.eu/) | Requires an account and OAuth client; Sentinel Hub APIs require OAuth access tokens. Current app samples a small area around the farm pin because farm-boundary polygons are not collected. |
+| ISRO/NRSC Bhuvan LULC AOI statistics | `BHUVAN_API_TOKEN` | [Bhuvan API portal](https://bhuvan-app1.nrsc.gov.in/api/) | Copy the portal's daily access token into the backend `.env`; AOI statistics are historical land-cover context, not live NDVI. |
+| ISRO/NRSC Bhuvan land-cover map | none | [Bhuvan WMS guide](https://bhuvan.nrsc.gov.in/wiki/index.php/How_to_use_WMS_services) | The field map also streams public LULC imagery without an API token. |
 | SoilGrids / NASA POWER | none | [SoilGrids](https://rest.isric.org/) / [NASA POWER](https://power.larc.nasa.gov/docs/) | Not currently used in the live pipeline. SoilGrids REST v2 is paused by ISRIC; do not rely on it for this demo. |
 | Firebase email/password sign-in (optional) | `VITE_FIREBASE_API_KEY` | Firebase Console → Project settings → Your apps → Web app config | Firebase Spark has no-cost Authentication usage within its current limits. This web key identifies the Firebase project and is public by design; restrict it to Firebase APIs and your app domains. |
 | Vertex AI Gemini (optional) | `VERTEX_AI_PROJECT`, `VERTEX_AI_LOCATION`, `VERTEX_AI_MODEL` | Google Cloud project with Vertex AI API and Application Default Credentials | Separate Vertex AI quotas/billing; mock AI is used automatically when unavailable. |
@@ -22,14 +23,29 @@ Put the Gemini key in the root `.env`, for example:
 
 ```env
 GEMINI_API_KEY=your_key_here
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.5-flash
 MOCK_MODE=false
 ```
 
 Restart the backend (or run `docker compose up --build`) and check
 `/api/system/status`. With `MOCK_MODE=false`, weather and modelled surface soil
-moisture use Open-Meteo. If configured, Copernicus supplies Sentinel-2 NDVI
-around the farm pin; otherwise field-health shows a labelled demo estimate.
+moisture use Open-Meteo. Bhuvan provides both AOI statistics from its API and a
+public WMS layer for the map. To enable AOI statistics, sign in to the
+[Bhuvan API portal](https://bhuvan-app1.nrsc.gov.in/api/), copy its current
+daily access token, and set these in the root `.env`:
+
+```env
+BHUVAN_API_TOKEN=paste_today_s_token_here
+BHUVAN_LULC_API_URL=https://bhuvan-app1.nrsc.gov.in/api/lulc250k/curl_lulc250k.php
+BHUVAN_LULC_YEAR=2015_16
+```
+
+The Bhuvan API token expires daily, so replace `BHUVAN_API_TOKEN` with the new
+portal token and restart the backend when it expires. Keep the token only in
+the root `.env`; do not paste it into frontend code or logs. The API request
+uses a small WKT area around the saved farm pin. AOI statistics are from the
+selected LULC mapping cycle and are not current NDVI or a surveyed farm parcel.
+The public WMS map still needs recognized state and saved coordinates.
 Gemini handles farm chat, advisory translation, and image/symptom triage. If
 Gemini has no key or is unreachable, those AI features return an unavailable
 message instead of a mock answer.
@@ -42,11 +58,12 @@ precise personal details, or other sensitive information in prompts. See
 
 ## Vertex AI fallback
 
-To use Vertex AI instead of the Gemini API key, set `VERTEX_AI_PROJECT` and
-provide Google Application Default Credentials in the deployment environment.
-Vertex AI is selected first when configured. If initialization or a request
-fails, AgriAI automatically returns a deterministic mock response and labels
-the source as `mock-fallback`; the dashboard remains usable.
+To use Vertex AI first, set `VERTEX_AI_PROJECT` and provide Google Application
+Default Credentials in the deployment environment. Vertex AI is selected first
+when configured. If both Vertex AI and `GEMINI_API_KEY` are present, the Gemini
+API is tried automatically when Vertex initialization or a request fails. If
+both live providers fail, AgriAI returns a deterministic mock response labeled
+`mock-fallback`; the dashboard remains usable.
 
 ## Security status and limits
 
@@ -57,11 +74,12 @@ limits AI/diagnosis traffic per client IP. Set `AI_RATE_LIMIT_PER_MINUTE` and
 single-process protections; use a shared rate-limit store behind a trusted
 proxy for a multi-instance deployment.
 
-The current saved farm profile is a single shared local profile, and the
-Firebase sign-in widget is not yet verified by the backend. Do not expose this
-prototype as a multi-user service until backend identity checks and per-user
-farm ownership are implemented. The current SQLite file is for local/demo use;
-production deployment needs durable, user-scoped database storage.
+The backend now verifies Firebase ID tokens on farm, dashboard, chat, and crop
+diagnosis endpoints. Set `FIREBASE_PROJECT_ID` to the same project ID as
+`VITE_FIREBASE_PROJECT_ID`; each saved farm profile is keyed by the verified
+Firebase UID. Local SQLite is for development only. Before Cloud Run launch,
+move profiles to durable storage such as Firestore because a Cloud Run
+container's local filesystem is not persistent across instances or restarts.
 
 ## Firebase sign-in setup
 
@@ -93,20 +111,19 @@ instead of the seeded demo farmer name. On narrow/mobile screens, Google uses
 Firebase's redirect flow; on desktop it uses a popup. The mobile header keeps
 a visible **Sign in** label so the dialog is discoverable.
 
-## Copernicus Sentinel-2 setup
+## ISRO/NRSC Bhuvan API and WMS map
 
-1. Create an account in [Copernicus Data Space Ecosystem](https://dataspace.copernicus.eu/) and register an OAuth client.
-2. Put its client ID and secret in the backend root `.env`:
+The field map has an **ISRO LULC** layer switch alongside the street map. It
+requests public Bhuvan WMS imagery directly for the saved coordinates and state;
+no Bhuvan API token or satellite API key is required. Choose the Indian state
+when setting up the farm so the map can select the matching WMS layer. If a
+state layer is unavailable, the map falls back to the street view.
 
-   ```env
-   COPERNICUS_CLIENT_ID=your-client-id
-   COPERNICUS_CLIENT_SECRET=your-client-secret
-   ```
+The dashboard calls the Bhuvan LULC 250K AOI statistics API with the daily
+`BHUVAN_API_TOKEN`. The farm pin is expanded into a small WKT polygon; update
+the token in `.env` each day and restart the backend. Bhuvan LULC is historical
+land-cover context, not current NDVI or crop health. The 250K statistics are
+regional context; the public 50K WMS layer remains available on the field map.
 
-3. Restart the backend. `/api/system/status` should report the satellite
-   provider as `live`.
-
-The current implementation calculates a 30-day NDVI average over a small
-roughly 200 m square around the saved farm coordinate, not a surveyed field
-boundary. The returned crop-health category is an NDVI proxy and is not a
-disease diagnosis. Copernicus REST credentials are kept on the backend.
+The field map keeps an **ISRO LULC** layer switch that uses the public Bhuvan
+WMS. It needs saved coordinates and a recognized Indian state, but no token.

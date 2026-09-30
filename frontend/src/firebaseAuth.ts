@@ -29,6 +29,7 @@ function toAuthUser(user: User): AuthUser {
 export const firebaseAuth = {
   configured,
   currentUser: (): AuthUser | undefined => auth?.currentUser ? toAuthUser(auth.currentUser) : undefined,
+  getIdToken: async (): Promise<string | undefined> => auth?.currentUser ? auth.currentUser.getIdToken() : undefined,
   subscribe: (callback: (user: AuthUser | undefined) => void) => {
     if (!auth) { callback(undefined); return () => undefined }
     return onAuthStateChanged(auth, user => callback(user ? toAuthUser(user) : undefined))

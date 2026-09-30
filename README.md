@@ -15,8 +15,11 @@ actions while keeping external integrations replaceable.
 
 The app requests live Open-Meteo weather and modelled surface-soil moisture by
 default. If those requests fail, it falls back to clearly labelled demo values.
-Copernicus Sentinel-2 field-health data is used when its OAuth credentials are
-configured; otherwise the app labels its field-health value as a demo estimate.
+The field map can display ISRO/NRSC Bhuvan's public LULC WMS layer without an
+API key. The backend can also request Bhuvan LULC AOI statistics when a daily
+Bhuvan API token is set in `.env`. Both are historical land-cover context, not
+live NDVI or crop-health monitoring. OpenStreetMap remains available as the
+street-map layer.
 Gemini provides farm chat, advisory translation, and crop-image triage when
 `GEMINI_API_KEY` is configured.
 

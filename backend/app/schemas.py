@@ -104,8 +104,10 @@ class SoilObservation(BaseModel):
 
 class SatelliteObservation(BaseModel):
     source: str
+    availability_message: str | None = None
     ndvi: float | None = Field(default=None, ge=-1, le=1)
-    crop_health: Literal["poor", "fair", "good", "excellent"]
+    crop_health: Literal["poor", "fair", "good", "excellent", "unavailable"] = "unavailable"
+    land_cover: list[dict[str, str | float]] = Field(default_factory=list)
     cloud_cover_percent: float | None = Field(default=None, ge=0, le=100)
     observed_at: datetime
 

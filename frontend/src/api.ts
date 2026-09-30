@@ -1,3 +1,5 @@
+import { firebaseAuth } from './firebaseAuth'
+
 export type Location = { latitude: number; longitude: number; village?: string; state?: string }
 export type FarmType = 'crops' | 'livestock' | 'mixed'
 export type LivestockGroup = { species: 'cattle'|'buffalo'|'goat'|'sheep'|'poultry'|'pig'|'other'; count: number; breed?: string; purpose?: string }
@@ -8,9 +10,10 @@ export type Advisory = { summary: string; items: { priority: 'high'|'medium'|'lo
 export type Diagnosis = { diagnosis: string; confidence?: number | null; severity: 'low'|'medium'|'high'; actions: string[]; source: string }
 export type Interoperability = { schema: string; sources: { name: string; state: string; status: string; categories: string[] }[]; normalized_count: number; data_quality: string; last_sync: string }
 
-const profileKey = 'agriai-farm-profile'
-const localProfile = (): Profile | null => {
-  try { const value = localStorage.getItem(profileKey); return value ? JSON.parse(value) as Profile : null } catch { return null }
+const profileKey = (uid: string) => `agriai-farm-profile:${uid}`
+const localProfile = (uid?: string): Profile | null => {
+  if (!uid) return null
+  try { const value = localStorage.getItem(profileKey(uid)); return value ? JSON.parse(value) as Profile : null } catch { return null }
 }
 const unavailableDashboard = (profile: Profile | null): Dashboard => ({
   profile,
@@ -46,7 +49,11 @@ const advisory: Advisory = { summary: 'Your crops are looking healthy. Keep an e
 async function request<T>(path: string, options?: RequestInit, fallback?: T): Promise<T> {
   let response: Response
   try {
-    response = await fetch(`/api${path}`, { headers: { 'Content-Type': 'application/json' }, ...options })
+    const headers = new Headers(options?.headers)
+    if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+    const idToken = await firebaseAuth.getIdToken()
+    if (idToken) headers.set('Authorization', `Bearer ${idToken}`)
+    response = await fetch(`/api${path}`, { ...options, headers })
   } catch (error) {
     if (fallback !== undefined) return fallback
     if (error instanceof DOMException && error.name === 'AbortError') throw error
@@ -62,7 +69,8 @@ async function request<T>(path: string, options?: RequestInit, fallback?: T): Pr
 }
 export const api = {
   dashboard: async (): Promise<Dashboard> => {
-    const cached = localProfile()
+    const uid = firebaseAuth.currentUser()?.uid
+    const cached = localProfile(uid)
     let dashboard: Dashboard
     try { dashboard = await request<Dashboard>('/dashboard') }
     catch { dashboard = unavailableDashboard(cached) }
@@ -77,8 +85,11 @@ export const api = {
   },
   advisory: () => request<Advisory>('/advisory', undefined, advisory),
   onboarding: async (profile: Profile) => {
-    try { const result = await request<{ saved: boolean; profile: Profile }>('/onboarding', { method: 'POST', body: JSON.stringify(profile) }); localStorage.setItem(profileKey, JSON.stringify(profile)); return result }
-    catch { localStorage.setItem(profileKey, JSON.stringify(profile)); return { saved: true, profile } }
+    const uid = firebaseAuth.currentUser()?.uid
+    if (!uid) throw new Error('Sign in before saving your farm profile.')
+    const result = await request<{ saved: boolean; profile: Profile }>('/onboarding', { method: 'POST', body: JSON.stringify(profile) })
+    localStorage.setItem(profileKey(uid), JSON.stringify(profile))
+    return result
   },
   geocode: async (query: string, signal?: AbortSignal) => {
     let backendResults: { name: string; admin1: string; country: string; latitude: number; longitude: number }[] = []

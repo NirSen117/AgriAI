@@ -4,15 +4,68 @@ Real integrations can implement these protocols without changing route code.
 """
 
 from datetime import datetime, timezone
-from datetime import timedelta
+from math import cos, radians
 import base64
 import json
-from math import cos, radians
+import logging
+from time import sleep
 from typing import Protocol
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .schemas import AdvisoryResponse, DiagnosisRequest, DiagnosisResponse, Location, SatelliteObservation, SoilObservation, WeatherObservation
+
+logger = logging.getLogger(__name__)
+_GEMINI_FAILOVER_STATUSES = {404, 429, 500, 502, 503, 504}
+
+
+def _model_order(primary: str, fallbacks: list[str] | None) -> list[str]:
+    return list(dict.fromkeys([primary, *(model.strip() for model in (fallbacks or []) if model.strip())]))
+
+
+def _gemini_generate_with_failover(api_key: str, models: list[str], payload_for_model,
+                                   timeout_seconds: float, operation: str) -> dict:
+    for index, model in enumerate(models):
+        request = Request(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            data=json.dumps(payload_for_model(model)).encode(),
+            headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+            method="POST",
+        )
+        try:
+            with _open_gemini(request, timeout_seconds) as response:
+                return json.load(response)
+        except Exception as exc:
+            status = getattr(exc, "code", None)
+            if status not in _GEMINI_FAILOVER_STATUSES or index + 1 >= len(models):
+                raise
+            logger.warning("Gemini %s model %s returned HTTP %s; trying fallback model %s",
+                           operation, model, status, models[index + 1])
+    raise RuntimeError(f"All configured Gemini models failed for {operation}")
+
+
+def _open_gemini(request: Request, timeout_seconds: float):
+    """Retry brief Gemini 5xx outages; never retry auth, model, or quota errors."""
+    for attempt in range(3):
+        try:
+            return urlopen(request, timeout=timeout_seconds)
+        except Exception as exc:
+            status = getattr(exc, "code", None)
+            if status not in (500, 502, 503, 504) or attempt == 2:
+                raise
+            sleep(0.75 * (2 ** attempt))
+
+
+def _response_text(result: dict) -> str:
+    """Collect every user-facing text part, excluding Gemini thought parts."""
+    candidates = result.get("candidates", [])
+    if not candidates:
+        return ""
+    parts = candidates[0].get("content", {}).get("parts", [])
+    return "\n".join(
+        part["text"] for part in parts
+        if isinstance(part.get("text"), str) and part["text"].strip() and not part.get("thought")
+    ).strip()
 
 
 class WeatherProvider(Protocol):
@@ -37,6 +90,11 @@ class DiseaseProvider(Protocol):
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _thinking_config(model: str) -> dict[str, str | int]:
+    # Gemini 2.5 uses thinkingBudget; Gemini 3.x uses thinkingLevel.
+    return {"thinkingLevel": "low"} if model.startswith("gemini-3") else {"thinkingBudget": 0}
 
 
 class MockWeatherProvider:
@@ -118,75 +176,78 @@ class MockSatelliteProvider:
                                     cloud_cover_percent=18, observed_at=_now())
 
 
-class CopernicusSatelliteProvider:
-    """Recent Sentinel-2 NDVI statistics for a small area around the farm pin."""
+class BhuvanLulcProvider:
+    """Bhuvan LULC AOI statistics. The access token is supplied by the user."""
 
-    endpoint = "https://sh.dataspace.copernicus.eu/statistics/v1"
-    token_endpoint = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
-
-    def __init__(self, client_id: str, client_secret: str, timeout_seconds: float) -> None:
-        self.client_id = client_id
-        self.client_secret = client_secret
+    def __init__(self, token: str, endpoint: str, year: str, timeout_seconds: float) -> None:
+        self.token = token.strip()
+        self.endpoint = endpoint
+        self.year = year
         self.timeout_seconds = timeout_seconds
 
-    def get_observation(self, location: Location) -> SatelliteObservation:
-        token_request = Request(
-            self.token_endpoint,
-            data=urlencode({"grant_type": "client_credentials", "client_id": self.client_id,
-                            "client_secret": self.client_secret}).encode(),
-            headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
-            method="POST",
-        )
-        with urlopen(token_request, timeout=self.timeout_seconds) as response:
-            token = json.load(response)["access_token"]
+    @staticmethod
+    def _records(payload):
+        if isinstance(payload, list):
+            return payload
+        if isinstance(payload, dict):
+            for key in ("data", "records", "result", "results"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    return value
+                if isinstance(value, dict):
+                    nested = BhuvanLulcProvider._records(value)
+                    if nested:
+                        return nested
+        return []
 
-        now = datetime.now(timezone.utc)
-        start = (now - timedelta(days=30)).date().isoformat() + "T00:00:00Z"
-        end = now.date().isoformat() + "T23:59:59Z"
-        # No parcel polygon is collected yet; sample roughly a 200 m square around the farm pin.
+    def get_observation(self, location: Location) -> SatelliteObservation:
+        # Bhuvan's AOI statistics endpoint accepts WKT; use a roughly 200 m
+        # neighborhood while this prototype stores only a farm pin.
         lat_delta = 0.001
-        lon_delta = 0.001 / max(abs(cos(radians(location.latitude))), 0.1)
-        bbox = [location.longitude - lon_delta, location.latitude - lat_delta,
-                location.longitude + lon_delta, location.latitude + lat_delta]
-        evalscript = """//VERSION=3
-function setup() {
-  return {input:[{bands:["B04","B08","SCL","dataMask"]}], mosaicking:"ORBIT",
-    output:[{id:"ndvi",bands:1,sampleType:"FLOAT32"},{id:"dataMask",bands:1}]};
-}
-function evaluatePixel(samples) {
-  var total=0, count=0;
-  for (var i=0; i<samples.length; i++) {
-    var s=samples[i];
-    if (s.dataMask && [8,9,10,11].indexOf(s.SCL) < 0 && (s.B08+s.B04) !== 0) {
-      total += (s.B08-s.B04)/(s.B08+s.B04); count++;
-    }
-  }
-  return count ? {ndvi:[total/count],dataMask:[1]} : {ndvi:[0],dataMask:[0]};
-}"""
-        body = {
-            "input": {"bounds": {"bbox": bbox, "properties": {"crs": "http://www.opengis.net/def/crs/OGC/1.3/CRS84"}},
-                      "data": [{"type": "sentinel-2-l2a", "dataFilter": {
-                          "timeRange": {"from": start, "to": end}, "maxCloudCoverage": 80,
-                          "mosaickingOrder": "leastCC"}}]},
-            "aggregation": {"timeRange": {"from": start, "to": end}, "aggregationInterval": {"of": "P30D"},
-                            "evalscript": evalscript, "width": 20, "height": 20},
-        }
-        request = Request(self.endpoint, data=json.dumps(body).encode(), headers={
-            "Content-Type": "application/json", "Accept": "application/json", "Authorization": f"Bearer {token}",
-        }, method="POST")
+        lon_delta = lat_delta / max(abs(cos(radians(location.latitude))), 0.15)
+        west, east = location.longitude - lon_delta, location.longitude + lon_delta
+        south, north = location.latitude - lat_delta, location.latitude + lat_delta
+        polygon = f"POLYGON (({west} {south}, {east} {south}, {east} {north}, {west} {north}, {west} {south}))"
+        params = urlencode({"polygon": polygon, "year": self.year, "option": "json", "token": self.token})
+        request = Request(f"{self.endpoint}?{params}", method="POST",
+                          headers={"Accept": "application/json, text/plain;q=0.9, */*;q=0.8",
+                                   "Content-Type": "application/json"})
         with urlopen(request, timeout=self.timeout_seconds) as response:
-            result = json.load(response)
-        rows = result.get("data", [])
-        if not rows:
-            raise ValueError("Sentinel Hub returned no imagery for the farm location")
-        stats = rows[-1].get("outputs", {}).get("ndvi", {}).get("bands", {}).get("B0", {}).get("stats", {})
-        ndvi = stats.get("mean")
-        if ndvi is None or not stats.get("sampleCount", 0):
-            raise ValueError("Sentinel Hub returned no clear NDVI pixels")
-        ndvi = max(-1.0, min(1.0, float(ndvi)))
-        health = "poor" if ndvi < 0.2 else "fair" if ndvi < 0.4 else "good" if ndvi < 0.6 else "excellent"
-        return SatelliteObservation(source="copernicus-sentinel-2-near-location", ndvi=ndvi,
-                                    crop_health=health, cloud_cover_percent=None, observed_at=_now())
+            raw = response.read().decode("utf-8", errors="replace")
+        try:
+            payload = json.loads(raw)
+        except ValueError:
+            start = raw.find("[")
+            end = raw.rfind("]")
+            if start < 0 or end <= start:
+                raise ValueError("Bhuvan returned a non-JSON response")
+            payload = json.loads(raw[start:end + 1])
+        records = self._records(payload)
+        if not records:
+            raise ValueError("Bhuvan response contained no LULC records")
+
+        totals: dict[str, float] = {}
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            label = str(record.get("LULC Description") or record.get("lulc_description") or
+                        record.get("class") or record.get("label") or "").strip()
+            raw_area = (record.get("Area in Sq. Km") or record.get("area_sq_km") or
+                        record.get("area") or 0)
+            try:
+                area = float(str(raw_area).replace(",", ""))
+            except (TypeError, ValueError):
+                continue
+            if label and area >= 0:
+                totals[label] = totals.get(label, 0.0) + area
+        total_area = sum(totals.values())
+        if total_area <= 0:
+            raise ValueError("Bhuvan response had no usable area statistics")
+        land_cover = [{"code": str(index), "label": label, "area_sq_km": round(area, 6),
+                       "share_percent": round(area / total_area * 100, 2)}
+                      for index, (label, area) in enumerate(sorted(totals.items(), key=lambda item: item[1], reverse=True))]
+        return SatelliteObservation(source="isro-bhuvan-lulc-250k", land_cover=land_cover,
+                                    crop_health="unavailable", observed_at=_now())
 
 
 class MockAIProvider:
@@ -224,9 +285,11 @@ def ai_unavailable_message(language: str | None = None) -> str:
 class GeminiAIProvider:
     """Text-only Gemini integration that keeps the API key on the server."""
 
-    def __init__(self, api_key: str, model: str, timeout_seconds: float) -> None:
+    def __init__(self, api_key: str, model: str, timeout_seconds: float,
+                 fallback_models: list[str] | None = None) -> None:
         self.api_key = api_key
         self.model = model
+        self.models = _model_order(model, fallback_models)
         self.timeout_seconds = timeout_seconds
 
     def answer(self, question: str, crop: str | None = None, context: dict | None = None) -> str:
@@ -245,22 +308,20 @@ class GeminiAIProvider:
             "decisions, recommend a local agronomist. Do not provide hidden reasoning; give a short evidence summary."
         )
         user_content = f"Farmer question: {question}\nCrop: {crop or 'not specified'}\nStructured farm context: {farm_context}"
-        payload = json.dumps({
-            "systemInstruction": {"parts": [{"text": system_instruction}]},
-            "contents": [{"role": "user", "parts": [{"text": user_content}]}],
-            "generationConfig": {"temperature": 0.3, "maxOutputTokens": 300},
-        }).encode()
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
-        request = Request(url, data=payload, headers={
-            "Content-Type": "application/json", "x-goog-api-key": self.api_key,
-        }, method="POST")
-        with urlopen(request, timeout=self.timeout_seconds) as response:
-            result = json.load(response)
+        result = _gemini_generate_with_failover(
+            self.api_key,
+            self.models,
+            lambda model: {
+                "systemInstruction": {"parts": [{"text": system_instruction}]},
+                "contents": [{"role": "user", "parts": [{"text": user_content}]}],
+                "generationConfig": {"temperature": 0.3, "maxOutputTokens": 700,
+                                     "thinkingConfig": _thinking_config(model)},
+            },
+            self.timeout_seconds,
+            "text generation",
+        )
 
-        candidates = result.get("candidates", [])
-        if not candidates:
-            raise ValueError("Gemini returned no answer")
-        text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
+        text = _response_text(result)
         if not text:
             raise ValueError("Gemini returned an empty answer")
         return text
@@ -278,7 +339,8 @@ class GeminiAIProvider:
         payload = json.dumps({
             "systemInstruction": {"parts": [{"text": instruction}]},
             "contents": [{"role": "user", "parts": [{"text": json.dumps(source, ensure_ascii=False)}]}],
-            "generationConfig": {"temperature": 0, "maxOutputTokens": 500, "responseMimeType": "application/json"},
+            "generationConfig": {"temperature": 0, "maxOutputTokens": 900,
+                                 "thinkingConfig": _thinking_config(self.model), "responseMimeType": "application/json"},
         }).encode()
         request = Request(
             f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
@@ -286,8 +348,7 @@ class GeminiAIProvider:
         )
         with urlopen(request, timeout=self.timeout_seconds) as response:
             result = json.load(response)
-        candidates = result.get("candidates", [])
-        text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "") if candidates else ""
+        text = _response_text(result)
         translated = json.loads(text)
         if not isinstance(translated.get("summary"), str) or len(translated.get("items", [])) != len(advisory.items):
             raise ValueError("Gemini returned an invalid translated advisory")
@@ -302,9 +363,11 @@ class GeminiAIProvider:
 class GeminiDiseaseProvider:
     """Uses Gemini multimodal input for image and symptom-based crop triage."""
 
-    def __init__(self, api_key: str, model: str, timeout_seconds: float) -> None:
+    def __init__(self, api_key: str, model: str, timeout_seconds: float,
+                 fallback_models: list[str] | None = None) -> None:
         self.api_key = api_key
         self.model = model
+        self.models = _model_order(model, fallback_models)
         self.timeout_seconds = timeout_seconds
 
     def diagnose(self, request: DiagnosisRequest, language: str | None = None) -> DiagnosisResponse:
@@ -322,18 +385,18 @@ class GeminiDiseaseProvider:
             header, image_data = request.image_url.split(",", 1)
             mime_type = header.removeprefix("data:").removesuffix(";base64")
             parts.append({"inlineData": {"mimeType": mime_type, "data": image_data}})
-        payload = json.dumps({
-            "contents": [{"role": "user", "parts": parts}],
-            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 450, "responseMimeType": "application/json"},
-        }).encode()
-        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
-        request_http = Request(endpoint, data=payload, headers={
-            "Content-Type": "application/json", "x-goog-api-key": self.api_key,
-        }, method="POST")
-        with urlopen(request_http, timeout=self.timeout_seconds) as response:
-            result = json.load(response)
-        candidates = result.get("candidates", [])
-        text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "") if candidates else ""
+        result = _gemini_generate_with_failover(
+            self.api_key,
+            self.models,
+            lambda model: {
+                "contents": [{"role": "user", "parts": parts}],
+                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 900,
+                                     "thinkingConfig": _thinking_config(model), "responseMimeType": "application/json"},
+            },
+            self.timeout_seconds,
+            "crop diagnosis",
+        )
+        text = _response_text(result)
         parsed = json.loads(text)
         diagnosis = DiagnosisResponse.model_validate({**parsed, "source": "gemini-vision"})
         if not diagnosis.actions:

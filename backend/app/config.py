@@ -14,15 +14,20 @@ class Settings(BaseSettings):
     weather_api_key: str | None = None
     ai_api_key: str | None = None
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.5-flash"
+    gemini_fallback_models: str = "gemini-3.5-flash-lite,gemini-3.5-flash,gemini-3.6-flash"
+    firebase_project_id: str | None = None
     vertex_ai_project: str | None = None
     vertex_ai_location: str = "us-central1"
-    vertex_ai_model: str = "gemini-2.5-flash"
-    copernicus_client_id: str | None = None
-    copernicus_client_secret: str | None = None
+    vertex_ai_model: str = "gemini-3.5-flash"
     hf_token: str | None = None
     open_meteo_base_url: str = "https://api.open-meteo.com/v1/forecast"
-    http_timeout_seconds: float = 8.0
+    bhuvan_api_token: str | None = None
+    # Bhuvan's AOI endpoint is published under lulc250k; the guessed 50K
+    # endpoint path returns 404. The 50K layer remains available as public WMS.
+    bhuvan_lulc_api_url: str = "https://bhuvan-app1.nrsc.gov.in/api/lulc250k/curl_lulc250k.php"
+    bhuvan_lulc_year: str = "2015_16"
+    http_timeout_seconds: float = 30.0
     database_path: str = "./data/agriai.db"
     ai_rate_limit_per_minute: int = 15
     max_request_bytes: int = 7 * 1024 * 1024

@@ -11,7 +11,7 @@ install the backend requirements and run `uvicorn app.main:app --reload` from
 The root `Dockerfile` builds the frontend, starts FastAPI on an internal port,
 and serves the React app through nginx on port `7860`. Create a Space with the
 Docker SDK, push this repository, and add `GEMINI_API_KEY` under **Settings →
-Variables and secrets**. Add `MOCK_MODE=false` and `GEMINI_MODEL=gemini-2.5-flash`
+Variables and secrets**. Add `MOCK_MODE=false` and `GEMINI_MODEL=gemini-3.5-flash`
 as variables if you want live weather and Gemini; the app still works with
 mock mode enabled.
 

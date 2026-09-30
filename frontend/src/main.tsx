@@ -4,5 +4,6 @@ import App from './App'
 import './styles.css'
 import './layout.css'
 import './auth.css'
+import './experience.css'
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)

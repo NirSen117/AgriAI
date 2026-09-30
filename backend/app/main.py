@@ -3,11 +3,14 @@ from collections import defaultdict, deque
 import json
 import logging
 import sqlite3
+import re
+from threading import Lock
 from pathlib import Path
-from time import monotonic
+from time import monotonic, time
 from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -15,7 +18,7 @@ from .advisory import build_advisory, localize_advisory
 from .config import get_settings
 from .providers import (
     GeminiAIProvider, GeminiDiseaseProvider, VertexAIProvider,
-    BhuvanLulcProvider, MockSatelliteProvider, MockSoilProvider, MockWeatherProvider,
+    BhuvanLulcProvider, MockAIProvider, MockDiseaseProvider, MockSatelliteProvider, MockSoilProvider, MockWeatherProvider,
     OpenMeteoSoilProvider, OpenMeteoWeatherProvider,
 )
 from .schemas import (AdvisoryItem, AdvisoryResponse, AskRequest, AskResponse, DashboardResponse, DiagnosisRequest,
@@ -29,6 +32,89 @@ app.add_middleware(CORSMiddleware, allow_origins=settings.allowed_origins, allow
                    allow_methods=["GET", "POST"], allow_headers=["Content-Type", "Authorization"])
 
 _ai_requests: dict[str, deque[float]] = defaultdict(deque)
+_firebase_certificates: dict[str, str] = {}
+_firebase_certificates_expires_at = 0.0
+_firebase_certificates_lock = Lock()
+
+
+def _get_firebase_signing_certificates() -> dict[str, str]:
+    global _firebase_certificates, _firebase_certificates_expires_at
+    if _firebase_certificates and monotonic() < _firebase_certificates_expires_at:
+        return _firebase_certificates
+    with _firebase_certificates_lock:
+        if _firebase_certificates and monotonic() < _firebase_certificates_expires_at:
+            return _firebase_certificates
+        request = Request(
+            "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com",
+            headers={"Accept": "application/json"},
+        )
+        with urlopen(request, timeout=settings.http_timeout_seconds) as response:
+            certificates = json.load(response)
+            cache_control = response.headers.get("Cache-Control", "")
+        if not isinstance(certificates, dict) or not certificates:
+            raise ValueError("Firebase returned no signing certificates")
+        max_age = re.search(r"max-age=(\d+)", cache_control)
+        cache_seconds = int(max_age.group(1)) if max_age else 3600
+        _firebase_certificates = certificates
+        _firebase_certificates_expires_at = monotonic() + max(60, cache_seconds)
+        return _firebase_certificates
+
+
+def require_firebase_user(authorization: str | None = Header(default=None)) -> str:
+    """Validate a Firebase ID token and return its stable Firebase UID."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Sign in to access your farm data.",
+                            headers={"WWW-Authenticate": "Bearer"})
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Invalid sign-in token.",
+                            headers={"WWW-Authenticate": "Bearer"})
+    if not settings.firebase_project_id:
+        logger.error("Firebase token verification is not configured: FIREBASE_PROJECT_ID is empty")
+        raise HTTPException(status_code=503, detail="Firebase authentication is not configured on the backend.")
+
+    try:
+        import jwt
+        from cryptography import x509
+
+        header = jwt.get_unverified_header(token)
+        key_id = header.get("kid")
+        certificates = _get_firebase_signing_certificates()
+        certificate = certificates.get(key_id) if isinstance(key_id, str) else None
+        if not certificate:
+            raise jwt.InvalidTokenError("Firebase signing key is unknown")
+        public_key = x509.load_pem_x509_certificate(certificate.encode("utf-8")).public_key()
+        decoded = jwt.decode(
+            token,
+            public_key,
+            algorithms=["RS256"],
+            audience=settings.firebase_project_id,
+            issuer=f"https://securetoken.google.com/{settings.firebase_project_id}",
+            options={"require": ["exp", "iat", "auth_time", "sub"]},
+        )
+        user_id = decoded.get("sub")
+        auth_time = decoded.get("auth_time")
+        if isinstance(auth_time, bool) or not isinstance(auth_time, (int, float)) or auth_time > time():
+            raise jwt.InvalidTokenError("Firebase token has an invalid authentication time")
+        if not isinstance(user_id, str) or not user_id:
+            raise jwt.InvalidTokenError("Firebase token has no UID")
+        return user_id
+    except HTTPException:
+        raise
+    except (HTTPError, URLError, TimeoutError):
+        logger.exception("Unable to fetch Firebase token-signing certificates")
+        raise HTTPException(status_code=503, detail="Could not verify sign-in right now. Please retry.")
+    except Exception as exc:
+        try:
+            import jwt
+            invalid_token = isinstance(exc, (jwt.InvalidTokenError, ValueError, KeyError))
+        except ImportError:
+            invalid_token = isinstance(exc, (ValueError, KeyError))
+        if invalid_token:
+            raise HTTPException(status_code=401, detail="Your sign-in session is invalid or expired. Sign in again.",
+                                headers={"WWW-Authenticate": "Bearer"}) from exc
+        logger.exception("Firebase ID-token verification failed")
+        raise HTTPException(status_code=503, detail="Could not verify your sign-in with Firebase. Please retry.") from exc
 
 
 def _gemini_failure_message(exc: Exception) -> str:
@@ -56,7 +142,25 @@ def _gemini_failure_message(exc: Exception) -> str:
 
 def _log_gemini_failure(operation: str, exc: Exception) -> None:
     status = exc.code if isinstance(exc, HTTPError) else "none"
-    logger.error("Gemini %s failed (exception=%s, http_status=%s)", operation, type(exc).__name__, status, exc_info=True)
+    if isinstance(exc, HTTPError):
+        # Google includes the violated quota/rate metric and retry guidance in
+        # the error body. Log only those fields; never log request headers or
+        # the API key.
+        try:
+            payload = json.loads(exc.read(8192).decode("utf-8", errors="replace"))
+            error = payload.get("error", {}) if isinstance(payload, dict) else {}
+            message = error.get("message", "") if isinstance(error, dict) else ""
+            reason = error.get("status", "") if isinstance(error, dict) else ""
+            retry_after = exc.headers.get("Retry-After") if exc.headers else None
+        except Exception:
+            message, reason, retry_after = "", "", None
+        logger.warning(
+            "Gemini %s failed (exception=%s, http_status=%s, google_status=%s, retry_after=%s, message=%s)",
+            operation, type(exc).__name__, status, reason or "unknown", retry_after or "unknown",
+            message[:500] or "no provider message",
+        )
+    else:
+        logger.error("Gemini %s failed (exception=%s, http_status=%s)", operation, type(exc).__name__, status, exc_info=True)
 
 
 @app.middleware("http")
@@ -97,34 +201,34 @@ satellite = MockSatelliteProvider() if settings.mock_mode else (
                        settings.bhuvan_lulc_year, settings.http_timeout_seconds)
     if settings.bhuvan_api_token else None
 )
+ai_fallback: GeminiAIProvider | None = (
+    GeminiAIProvider(settings.gemini_api_key, settings.gemini_model, settings.http_timeout_seconds,
+                    settings.gemini_fallback_models.split(","))
+    if settings.gemini_api_key else None
+)
 if settings.vertex_ai_project:
     try:
         ai = VertexAIProvider(settings.vertex_ai_project, settings.vertex_ai_location, settings.vertex_ai_model)
     except Exception:
-        logger.exception("Vertex AI initialization failed; live AI is unavailable")
-        ai = None
-elif settings.gemini_api_key:
-    ai = GeminiAIProvider(settings.gemini_api_key, settings.gemini_model, settings.http_timeout_seconds)
+        logger.exception("Vertex AI initialization failed; falling back to Gemini API")
+        ai = ai_fallback
 else:
-    ai = None
-disease = GeminiDiseaseProvider(settings.gemini_api_key, settings.gemini_model, settings.http_timeout_seconds) if settings.gemini_api_key else None
+    ai = ai_fallback
+disease = GeminiDiseaseProvider(settings.gemini_api_key, settings.gemini_model, settings.http_timeout_seconds,
+                                settings.gemini_fallback_models.split(",")) if settings.gemini_api_key else None
 def _connect() -> sqlite3.Connection:
     path = Path(settings.database_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path)
-    connection.execute("CREATE TABLE IF NOT EXISTS farm_profile (id INTEGER PRIMARY KEY CHECK (id = 1), payload TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    connection.execute("CREATE TABLE IF NOT EXISTS farm_profiles (user_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL)")
     connection.commit()
     return connection
 
 
-def _load_profile() -> FarmProfile | None:
+def _load_profile(user_id: str) -> FarmProfile | None:
     with _connect() as connection:
-        row = connection.execute("SELECT payload FROM farm_profile WHERE id = 1").fetchone()
+        row = connection.execute("SELECT payload FROM farm_profiles WHERE user_id = ?", (user_id,)).fetchone()
     return FarmProfile.model_validate_json(row[0]) if row else None
-
-
-profile: FarmProfile | None = _load_profile()
-
 
 @app.get("/api/health", response_model=HealthResponse, tags=["system"])
 def health() -> HealthResponse:
@@ -145,7 +249,10 @@ def status() -> SystemStatus:
                                 "Bhuvan API token missing; add BHUVAN_API_TOKEN; public Bhuvan WMS map remains available")),
         ProviderStatus(name="ai", available=isinstance(ai, (GeminiAIProvider, VertexAIProvider)),
                        mode="live" if isinstance(ai, (GeminiAIProvider, VertexAIProvider)) else "fallback",
-                       message="Vertex AI configured; access is checked when an AI action runs" if isinstance(ai, VertexAIProvider) else f"Gemini key configured for {settings.gemini_model}; access is checked when an AI action runs" if isinstance(ai, GeminiAIProvider) else "Gemini unavailable: no live AI provider is configured"),
+                       message=("Vertex AI configured with Gemini API fallback; access is checked when an AI action runs" if isinstance(ai, VertexAIProvider) and ai_fallback else
+                                "Vertex AI configured; access is checked when an AI action runs" if isinstance(ai, VertexAIProvider) else
+                                f"Gemini key configured for {settings.gemini_model}; access is checked when an AI action runs" if isinstance(ai, GeminiAIProvider) else
+                                "Gemini unavailable: no live AI provider is configured")),
         ProviderStatus(name="disease", available=isinstance(disease, GeminiDiseaseProvider),
                        mode="live" if isinstance(disease, GeminiDiseaseProvider) else "fallback",
                        message="Gemini key configured; access is checked when image diagnosis runs" if isinstance(disease, GeminiDiseaseProvider) else "Gemini unavailable: no API key is configured"),
@@ -159,17 +266,15 @@ def status_alias() -> SystemStatus:
 
 
 @app.post("/api/onboarding", response_model=OnboardingResponse, tags=["farm"])
-def onboarding(payload: FarmProfile) -> OnboardingResponse:
-    global profile
-    profile = payload
+def onboarding(payload: FarmProfile, user_id: str = Depends(require_firebase_user)) -> OnboardingResponse:
     with _connect() as connection:
-        connection.execute("INSERT INTO farm_profile (id, payload, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at", (payload.model_dump_json(), datetime.now(timezone.utc).isoformat()))
+        connection.execute("INSERT INTO farm_profiles (user_id, payload, updated_at) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at", (user_id, payload.model_dump_json(), datetime.now(timezone.utc).isoformat()))
     return OnboardingResponse(saved=True, profile=payload, message="Farm profile saved.")
 
 
 @app.get("/api/farm", response_model=FarmProfile | None, tags=["farm"])
-def get_farm() -> FarmProfile | None:
-    return profile
+def get_farm(user_id: str = Depends(require_firebase_user)) -> FarmProfile | None:
+    return _load_profile(user_id)
 
 
 @app.get("/api/geocode", tags=["farm"])
@@ -186,7 +291,7 @@ def geocode(q: str = Query(min_length=2, max_length=120)) -> dict:
         return {"results": [], "unavailable": True}
 
 
-def _location() -> Location:
+def _location(profile: FarmProfile | None) -> Location:
     # A neutral India-centre coordinate is used only for provider calls before
     # onboarding. It is never returned as a farmer's saved location.
     return profile.location if profile else Location(latitude=20.5937, longitude=78.9629)
@@ -209,8 +314,9 @@ def _satellite_unavailable_message(exc: Exception) -> str:
 
 
 @app.get("/api/dashboard", response_model=DashboardResponse, tags=["farm"])
-def dashboard() -> DashboardResponse:
-    location = _location()
+def dashboard(user_id: str = Depends(require_firebase_user)) -> DashboardResponse:
+    profile = _load_profile(user_id)
+    location = _location(profile)
     try:
         weather_observation = weather.get_weather(location)
     except Exception:
@@ -242,8 +348,9 @@ def dashboard() -> DashboardResponse:
 
 
 @app.get("/api/advisory", response_model=AdvisoryResponse, tags=["farm"])
-def advisory() -> AdvisoryResponse:
-    location = _location()
+def advisory(user_id: str = Depends(require_firebase_user)) -> AdvisoryResponse:
+    profile = _load_profile(user_id)
+    location = _location(profile)
     try:
         weather_observation = weather.get_weather(location)
     except Exception:
@@ -278,8 +385,13 @@ def advisory() -> AdvisoryResponse:
 
 
 @app.post("/api/ai/ask", response_model=AskResponse, tags=["ai"])
-def ask(payload: AskRequest) -> AskResponse:
+def ask(payload: AskRequest, user_id: str = Depends(require_firebase_user)) -> AskResponse:
+    profile = _load_profile(user_id)
     selected_crop = payload.crop or (profile.crops[0] if profile and profile.crops else None)
+    language = profile.preferred_language if profile else "en"
+    if ai is None:
+        fallback = MockAIProvider().answer(payload.question, selected_crop, {"farm": profile.model_dump(mode="json")} if profile else None)
+        return AskResponse(answer=fallback, source="mock-fallback")
     context: dict = {}
     if profile:
         context["farm"] = profile.model_dump(mode="json")
@@ -301,13 +413,23 @@ def ask(payload: AskRequest) -> AskResponse:
         source = "vertex-ai" if isinstance(ai, VertexAIProvider) else "gemini" if isinstance(ai, GeminiAIProvider) else "mock"
     except Exception as exc:
         _log_gemini_failure("text generation", exc)
-        answer = MockAIProvider().answer(payload.question, selected_crop, context)
-        source = "mock-fallback"
+        if isinstance(ai, VertexAIProvider) and ai_fallback is not None:
+            try:
+                answer = ai_fallback.answer(payload.question, selected_crop, context)
+                source = "gemini-fallback"
+            except Exception as fallback_exc:
+                _log_gemini_failure("Gemini fallback text generation", fallback_exc)
+                answer = MockAIProvider().answer(payload.question, selected_crop, context)
+                source = "mock-fallback"
+        else:
+            answer = MockAIProvider().answer(payload.question, selected_crop, context)
+            source = "mock-fallback"
     return AskResponse(answer=answer, source=source)
 
 
 @app.post("/api/disease/analyze", response_model=DiagnosisResponse, tags=["ai"])
-def analyze(payload: DiagnosisRequest) -> DiagnosisResponse:
+def analyze(payload: DiagnosisRequest, user_id: str = Depends(require_firebase_user)) -> DiagnosisResponse:
+    profile = _load_profile(user_id)
     if not payload.image_url and not payload.symptoms:
         raise HTTPException(status_code=422, detail="Provide image_url or symptoms to analyze.")
     language = profile.preferred_language if profile else "en"
@@ -319,22 +441,22 @@ def analyze(payload: DiagnosisRequest) -> DiagnosisResponse:
 
 
 @app.post("/api/diagnosis", response_model=DiagnosisResponse, include_in_schema=False)
-def diagnosis_alias(payload: DiagnosisRequest) -> DiagnosisResponse:
-    return analyze(payload)
+def diagnosis_alias(payload: DiagnosisRequest, user_id: str = Depends(require_firebase_user)) -> DiagnosisResponse:
+    return analyze(payload, user_id)
 
 
 @app.get("/api/permissions", response_model=PermissionResponse, tags=["system"])
-def permissions() -> PermissionResponse:
+def permissions(user_id: str = Depends(require_firebase_user)) -> PermissionResponse:
     return PermissionResponse(explanation="Permissions are optional; location and camera are requested only after user action.")
 
 
 @app.get("/api/demo", response_model=DashboardResponse, tags=["system"])
-def demo() -> DashboardResponse:
-    return dashboard()
+def demo(user_id: str = Depends(require_firebase_user)) -> DashboardResponse:
+    return dashboard(user_id)
 
 
 @app.get("/api/interoperability", tags=["interoperability"])
-def interoperability() -> dict:
+def interoperability(user_id: str = Depends(require_firebase_user)) -> dict:
     states = ["Karnataka", "Maharashtra", "Tamil Nadu"]
     timestamp = datetime.now(timezone.utc).isoformat()
     return {

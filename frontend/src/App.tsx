@@ -1,12 +1,33 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, ArrowRight, Bell, Bot, Camera, Check, ChevronRight, CloudSun, Droplets, Gauge, Home, Leaf, MapPin, Menu, MessageCircle, Plus, ShieldCheck, Sprout, Sun, Thermometer, Upload, UserRound, Wind, X } from 'lucide-react'
+import { ArrowRight, Bell, Bot, Camera, Check, ChevronLeft, ChevronRight, CloudSun, Droplets, Gauge, Home, Leaf, MapPin, Menu, Mic, MicOff, Moon, Plus, ShieldCheck, Sprout, Sun, Thermometer, Upload, UserRound, Wind, X } from 'lucide-react'
 import { api, Advisory, Dashboard, Diagnosis, Interoperability, Location, Profile } from './api'
 import { AuthModal } from './AuthModal'
 import { AuthUser, firebaseAuth } from './firebaseAuth'
 import { languages, t } from './i18n'
 
 type Page = 'overview' | 'fields' | 'advice' | 'network' | 'permissions'
-const nav = [{ id: 'overview' as Page, key: 'overview' as const, icon: Home }, { id: 'fields' as Page, key: 'fields' as const, icon: Sprout }, { id: 'advice' as Page, key: 'advice' as const, icon: Leaf }, { id: 'network' as Page, label: 'Data network', icon: ShieldCheck }, { id: 'permissions' as Page, key: 'permissions' as const, icon: ShieldCheck }]
+type SpeechRecognitionLike = {
+  lang: string; interimResults: boolean; continuous: boolean
+  onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null
+  onerror: ((event: { error: string }) => void) | null
+  onend: (() => void) | null
+  start: () => void; stop: () => void; abort: () => void
+}
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike
+const speechLocales: Record<string, string> = { en: 'en-IN', hi: 'hi-IN', kn: 'kn-IN', ta: 'ta-IN', te: 'te-IN', bn: 'bn-IN', mr: 'mr-IN' }
+const nav = [{ id: 'overview' as Page, key: 'overview' as const, icon: Home }, { id: 'fields' as Page, key: 'fields' as const, icon: Sprout }, { id: 'advice' as Page, key: 'advice' as const, icon: Leaf }, { id: 'network' as Page, label: 'Data network', icon: Gauge }, { id: 'permissions' as Page, key: 'permissions' as const, icon: ShieldCheck }]
+type FarmAlert = { id: string; title: string; detail: string; severity: 'high' | 'medium' }
+const getFarmAlerts = (dashboard?: Dashboard): FarmAlert[] => {
+  if (!dashboard) return []
+  const alerts: FarmAlert[] = []
+  const rain = dashboard.weather.rainfall_probability
+  if (dashboard.weather.source === 'open-meteo' && rain >= 0.7) alerts.push({ id: 'rain', title: 'Rain likely today', detail: `${Math.round(rain * 100)}% chance. Plan field work and check drainage.`, severity: 'medium' })
+  if (dashboard.weather.source === 'open-meteo' && dashboard.weather.temperature_c >= 40) alerts.push({ id: 'heat', title: 'High temperature', detail: `Current reading is ${Math.round(dashboard.weather.temperature_c)}°C. Check crops and livestock for heat stress.`, severity: 'high' })
+  if (dashboard.weather.source === 'open-meteo' && dashboard.weather.wind_kph >= 45) alerts.push({ id: 'wind', title: 'Strong wind conditions', detail: `${Math.round(dashboard.weather.wind_kph)} km/h. Secure lightweight equipment and avoid spraying.`, severity: 'medium' })
+  const moisture = dashboard.soil.moisture_percent
+  if (dashboard.soil.source.includes('open-meteo') && moisture != null && moisture <= 25) alerts.push({ id: 'moisture', title: 'Soil may be dry', detail: `Modelled surface moisture is ${Math.round(moisture)}%. Check the root zone before irrigating.`, severity: 'high' })
+  return alerts
+}
 const dataNotice = (dashboard: Dashboard) => {
   const weather = dashboard.weather.source === 'open-meteo' ? 'Live weather' : dashboard.weather.source === 'mock-weather' ? 'Demo weather (mock mode)' : dashboard.weather.source === 'location-required' ? 'Set your farm location to get local weather' : 'Weather unavailable right now'
   const soil = dashboard.soil.source.includes('open-meteo') ? 'modelled soil moisture' : 'demo soil values'
@@ -27,6 +48,12 @@ function App() {
   const [authReady, setAuthReady] = useState(false)
   const [showAuth, setShowAuth] = useState(false)
   const [notice, setNotice] = useState('')
+  const [uiLanguage, setUiLanguage] = useState(() => localStorage.getItem('agriai-ui-language') || '')
+  const [darkTheme, setDarkTheme] = useState(() => localStorage.getItem('agriai-theme') === 'dark')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('agriai-sidebar-collapsed') === 'true')
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | 'unsupported'>(() => typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported')
   useEffect(() => {
     return firebaseAuth.subscribe(user => { setAuthUser(user); setAuthReady(true) })
   }, [])
@@ -38,6 +65,44 @@ function App() {
       if (!nextDashboard.profile) setShowOnboarding(true)
     })
   }, [authUser?.uid])
+  useEffect(() => {
+    document.documentElement.dataset.theme = darkTheme ? 'dark' : 'light'
+    localStorage.setItem('agriai-theme', darkTheme ? 'dark' : 'light')
+  }, [darkTheme])
+  useEffect(() => {
+    const savedProfile = dashboard?.profile
+    if (!savedProfile) return
+    if (!uiLanguage) {
+      setUiLanguage(savedProfile.preferred_language || 'en')
+      return
+    }
+    if (savedProfile.preferred_language !== uiLanguage) {
+      const updated = { ...savedProfile, preferred_language: uiLanguage }
+      void api.onboarding(updated).then(() => setDashboard(current => current ? { ...current, profile: updated } : current))
+    }
+  }, [dashboard?.profile?.preferred_language, uiLanguage])
+  const changeLanguage = (next: string) => {
+    setUiLanguage(next)
+    localStorage.setItem('agriai-ui-language', next)
+    if (profile) {
+      const updated = { ...profile, preferred_language: next }
+      void api.onboarding(updated).then(() => setDashboard(current => current ? { ...current, profile: updated } : current))
+    }
+  }
+  const alerts = getFarmAlerts(dashboard)
+  const currentNavItem = nav.find(item => item.id === page)
+  const requestNotifications = async () => {
+    if (!('Notification' in window)) { setNotificationPermission('unsupported'); return }
+    try { setNotificationPermission(await Notification.requestPermission()) } catch { setNotificationPermission(Notification.permission) }
+  }
+  useEffect(() => {
+    if (notificationPermission !== 'granted') return
+    for (const alert of alerts) {
+      const key = `agriai-alert-${alert.id}-${new Date().toISOString().slice(0, 10)}`
+      if (sessionStorage.getItem(key)) continue
+      try { new Notification(alert.title, { body: alert.detail, tag: key }); sessionStorage.setItem(key, 'sent') } catch { /* Keep the in-app alert visible if OS notifications are unavailable. */ }
+    }
+  }, [notificationPermission, dashboard])
   const runAnalysis = async (includeGemini = true) => {
     setAnalysisLoading(true)
     if (includeGemini) setFarmAnalysis(undefined)
@@ -48,7 +113,12 @@ function App() {
       if (includeGemini && nextDashboard.profile) {
         const result = await api.ask('Analyze my farm using the current data. Clearly distinguish live measurements from estimates, state what data is missing, and give three short prioritized actions for my crop and farm. Do not invent measurements.', nextDashboard.profile.crops[0])
         setFarmAnalysis(result)
-        setNotice(`${dataNotice(nextDashboard)} · ${result.source === 'gemini' ? 'Gemini farm analysis ready' : 'Gemini unavailable'}`)
+        const analysisLabel = result.source === 'gemini' || result.source === 'gemini-fallback' || result.source === 'vertex-ai'
+          ? 'Live AI farm analysis ready'
+          : result.source === 'mock-fallback' || result.source === 'mock'
+            ? 'Demo AI fallback analysis ready'
+            : 'AI analysis unavailable'
+        setNotice(`${dataNotice(nextDashboard)} · ${analysisLabel}`)
       } else if (includeGemini) {
         setNotice('Finish setting up your farm before running a farm analysis.')
       } else {
@@ -59,40 +129,44 @@ function App() {
     } finally { setAnalysisLoading(false) }
   }
   const profile = dashboard?.profile
-  const language = profile?.preferred_language || 'en'
+  const language = uiLanguage || profile?.preferred_language || 'en'
   const firstName = authUser?.displayName?.trim().split(/\s+/)[0] || profile?.farmer_name?.split(' ')[0] || 'Farmer'
   if (!authReady) return <main className="auth-gate"><div className="auth-gate-card"><Logo/><p>Checking your sign-in…</p></div></main>
-  if (!authUser) return <main className="auth-gate"><div className="auth-gate-card"><Logo/><span className="eyebrow">FARMER ACCOUNT</span><h1>Sign in to AgriAI</h1><p>Log in or create an account to see your farm dashboard and personalized advice.</p><button className="primary-button" onClick={() => setShowAuth(true)}>Sign in or create an account <ArrowRight size={16}/></button></div>{showAuth && <AuthModal onClose={() => setShowAuth(false)} onAuthenticated={user => { setAuthUser(user); setShowAuth(false) }} />}</main>
-  return <div className="app-shell">
-    <aside className="sidebar">
-      <Logo />
+  if (!authUser) return <main className="auth-gate"><div className="auth-gate-card"><Logo/><span className="eyebrow">FARMER ACCOUNT</span><h1>Sign in to AgriAI</h1><p>Log in or create an account to see your farm dashboard and personalized advice.</p><label className="login-language">Choose your language<select value={language} onChange={event => changeLanguage(event.target.value)}>{languages.map(item => <option key={item.code} value={item.code}>{item.label}</option>)}</select></label><button className="primary-button" onClick={() => setShowAuth(true)}>Sign in or create an account <ArrowRight size={16}/></button></div>{showAuth && <AuthModal onClose={() => setShowAuth(false)} onAuthenticated={user => { setAuthUser(user); setShowAuth(false) }} />}</main>
+  return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${mobileNavOpen ? 'mobile-nav-open' : ''}`}>
+    <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
+      <div className="sidebar-brand"><Logo/><button className="sidebar-collapse" onClick={() => { const next = !sidebarCollapsed; setSidebarCollapsed(next); localStorage.setItem('agriai-sidebar-collapsed', String(next)) }} aria-label={sidebarCollapsed ? 'Expand navigation' : 'Collapse navigation'} title={sidebarCollapsed ? 'Expand navigation' : 'Collapse navigation'}>{sidebarCollapsed ? <ChevronRight size={17}/> : <ChevronLeft size={17}/>}</button></div>
       <div className="farm-switcher"><div className="avatar">{firstName[0]}</div><div><strong>{profile?.farm_name || 'My farm'}</strong><small>{profile?.location.village || 'Set up your farm'}</small></div><ChevronRight size={16}/></div>
-      <nav>{nav.map(item => <button className={page === item.id ? 'active' : ''} onClick={() => setPage(item.id)} key={item.id}><item.icon size={19}/><span>{item.key ? t(language, item.key) : item.label}</span></button>)}</nav>
-      <div className="sidebar-bottom"><button onClick={() => setShowOnboarding(true)} className="outline-button"><Plus size={17}/> Add field</button><small className="privacy"><ShieldCheck size={14}/> Your data stays yours</small></div>
+      <nav aria-label="Main navigation">{nav.map(item => <button title={item.key ? t(language, item.key) : item.label} className={page === item.id ? 'active' : ''} onClick={() => { setPage(item.id); setMobileNavOpen(false) }} key={item.id}><item.icon size={19}/><span>{item.key ? t(language, item.key) : item.label}</span></button>)}</nav>
+      <div className="sidebar-bottom"><button title="Manage farm and fields" aria-label="Manage farm and fields" onClick={() => setShowOnboarding(true)} className="outline-button"><Plus size={17}/> Add field</button><small className="privacy"><ShieldCheck size={14}/> Your data stays yours</small></div>
     </aside>
     <main>
-      <header className="topbar"><button className="mobile-menu" aria-label="Open menu"><Menu size={22}/></button><div className="breadcrumb"><span>{t(language, 'overview')}</span><span className="dot">·</span><span className="muted">{profile?.location.village || 'Set up farm location'}</span></div><div className="top-actions"><button className="icon-button" aria-label="Notifications"><Bell size={19}/><i/></button><button className="profile-button" onClick={() => authUser ? firebaseAuth.signOut() : setShowAuth(true)}><div className="avatar small">{authUser?.email[0]?.toUpperCase() || firstName[0]}</div><span className="auth-label">{authUser?.email || 'Sign in'}</span><ChevronRight size={15}/></button></div></header>
+      <header className="topbar"><button className="mobile-menu" aria-label="Open menu" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen(value => !value)}><Menu size={22}/></button><div className="breadcrumb"><span>{currentNavItem?.key ? t(language, currentNavItem.key) : currentNavItem?.label || t(language, 'overview')}</span><span className="dot">·</span><span className="muted">{profile?.location.village || 'Set up farm location'}</span></div><div className="top-actions"><label className="language-control" aria-label="Dashboard language"><span>Language</span><select value={language} onChange={event => changeLanguage(event.target.value)}>{languages.map(item => <option key={item.code} value={item.code}>{item.label}</option>)}</select></label><button className="icon-button theme-toggle" aria-label={darkTheme ? 'Switch to light theme' : 'Switch to dark theme'} title={darkTheme ? 'Light theme' : 'Dark theme'} onClick={() => setDarkTheme(value => !value)}>{darkTheme ? <Sun size={19}/> : <Moon size={19}/>}</button><div className="notification-anchor"><button className="icon-button" aria-label={`Notifications, ${alerts.length} alerts`} aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen(value => !value)}><Bell size={19}/>{alerts.length > 0 && <i/>}</button>{notificationsOpen && <div className="notification-popover" role="dialog" aria-label="Farm notifications"><div className="notification-heading"><strong>Farm alerts</strong><button onClick={() => setNotificationsOpen(false)} aria-label="Close notifications"><X size={16}/></button></div>{alerts.length ? <div className="notification-list">{alerts.map(alert => <article className={`notification-item ${alert.severity}`} key={alert.id}><span className="notification-dot"/><div><strong>{alert.title}</strong><p>{alert.detail}</p></div></article>)}</div> : <p className="notifications-empty">You’re all caught up. New weather and farm alerts will appear here.</p>}<div className="notification-footer">{notificationPermission === 'granted' ? <span className="permission-enabled"><Check size={14}/> Browser alerts enabled while dashboard is open</span> : notificationPermission === 'denied' ? <span>Browser alerts are blocked. Allow them in your browser’s site settings.</span> : notificationPermission === 'unsupported' ? <span>This browser does not support desktop alerts.</span> : <button className="enable-notifications" onClick={() => void requestNotifications()}>Enable browser notifications</button>}</div></div>}</div><button className="profile-button" onClick={() => authUser ? firebaseAuth.signOut() : setShowAuth(true)}><div className="avatar small">{authUser?.email[0]?.toUpperCase() || firstName[0]}</div><span className="auth-label">{authUser?.email || 'Sign in'}</span><ChevronRight size={15}/></button></div></header>
       <div className="page">
         {notice && <div className="demo-banner"><span><span className="status-dot"/> {notice}</span><button onClick={() => setNotice('')}><X size={15}/></button></div>}
-        {page === 'overview' && <Overview dashboard={dashboard} advice={advice} farmAnalysis={farmAnalysis} analysisLoading={analysisLoading} language={language} greetingName={firstName} onDiagnose={() => setDiagnosis(true)} onAsk={() => setAssistant(true)} onOnboard={() => setShowOnboarding(true)} onAnalyze={() => runAnalysis()} />}
+        {page === 'overview' && <Overview dashboard={dashboard} advice={advice} farmAnalysis={farmAnalysis} analysisLoading={analysisLoading} language={language} greetingName={firstName} onDiagnose={() => setDiagnosis(true)} onOnboard={() => setShowOnboarding(true)} onAnalyze={() => runAnalysis()} />}
         {page === 'fields' && <Fields dashboard={dashboard} language={language} onDiagnose={() => setDiagnosis(true)} onOnboard={() => setShowOnboarding(true)} />}
         {page === 'advice' && <Advice advice={advice} language={language} />}
-        {page === 'network' && <DataNetwork />}
-        {page === 'permissions' && <Permissions language={language} />}
+        {page === 'network' && <DataNetwork userId={authUser.uid} />}
+        {page === 'permissions' && <Permissions language={language} notificationPermission={notificationPermission} onRequestNotifications={() => void requestNotifications()} />}
       </div>
     </main>
+    {mobileNavOpen && <button className="mobile-nav-backdrop" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)}/>}
     <div className="mobile-nav">{nav.slice(0, 4).map(item => <button className={page === item.id ? 'active' : ''} onClick={() => setPage(item.id)} key={item.id}><item.icon size={18}/><span>{item.key ? t(language, item.key) : item.label}</span></button>)}</div>
     {showOnboarding && <Onboarding profile={profile} authName={authUser.displayName} language={language} onClose={() => setShowOnboarding(false)} onSaved={async p => { setShowOnboarding(false); await runAnalysis(false); setDashboard(d => d ? { ...d, profile: p } : d) }} />}
     {diagnosis && <DiagnosisModal crop={profile?.crops[0]} language={language} onClose={() => setDiagnosis(false)} />}
     {assistant && <Assistant crop={profile?.crops[0]} language={language} onClose={() => setAssistant(false)} />}
+    {!assistant && <button className="assistant-launcher" onClick={() => setAssistant(true)} aria-label="Ask AgriAI"><span className="launcher-icon"><Bot size={22}/></span><span>{t(language, 'askAI')}</span></button>}
     {showAuth && <AuthModal onClose={() => setShowAuth(false)} onAuthenticated={user => { setAuthUser(user); setShowAuth(false) }} />}
   </div>
 }
 
 function Logo() { return <div className="logo"><span className="logo-mark"><Sprout size={20}/></span><span>agri<strong>ai</strong></span></div> }
-function DataNetwork() {
+function DataNetwork({ userId }: { userId: string }) {
   const [network, setNetwork] = useState<Interoperability>()
-  useEffect(() => { api.interoperability().then(setNetwork).catch(() => undefined) }, [])
+  useEffect(() => {
+    api.interoperability().then(setNetwork).catch(() => undefined)
+  }, [userId])
   return <section className="network-page">
     <SectionHeader eyebrow="DIGITAL PUBLIC GOOD" title="Data network" />
     <p className="muted">State-specific agricultural records are normalized before they reach the shared intelligence layer.</p>
@@ -102,7 +176,7 @@ function DataNetwork() {
   </section>
 }
 function SectionHeader({ eyebrow, title, action }: { eyebrow?: string; title: string; action?: React.ReactNode }) { return <div className="section-header">{<div>{eyebrow && <span className="eyebrow">{eyebrow}</span>}<h2>{title}</h2></div>}{action}</div> }
-function Overview({ dashboard, advice, farmAnalysis, analysisLoading, language, greetingName, onDiagnose, onAsk, onOnboard, onAnalyze }: { dashboard?: Dashboard; advice?: Advisory; farmAnalysis?: { answer: string; source: string }; analysisLoading: boolean; language: string; greetingName: string; onDiagnose: () => void; onAsk: () => void; onOnboard: () => void; onAnalyze: () => void }) {
+function Overview({ dashboard, advice, farmAnalysis, analysisLoading, language, greetingName, onDiagnose, onOnboard, onAnalyze }: { dashboard?: Dashboard; advice?: Advisory; farmAnalysis?: { answer: string; source: string }; analysisLoading: boolean; language: string; greetingName: string; onDiagnose: () => void; onOnboard: () => void; onAnalyze: () => void }) {
   const d = dashboard
   const farm = d?.profile
   const hasCrops = !!farm?.crops.length
@@ -125,9 +199,9 @@ function Overview({ dashboard, advice, farmAnalysis, analysisLoading, language, 
       <Stat icon={<Sprout/>} label={hasCrops ? t(language, 'activeCrops') : t(language, 'livestockGroups')} value={String(hasCrops ? farm?.crops.length || 0 : livestockCount)} note={cropSummary} />
       <Stat icon={<Gauge/>} label={hasCrops ? satelliteLabel : t(language, 'livestockGroups')} value={hasCrops ? satelliteValue : String(livestockCount)} note={hasCrops ? satelliteNote : 'Animals registered on this farm'} tone="green" />
     </div>
-    <SectionHeader eyebrow="FIELD PULSE" title={t(language, 'currentConditions')} action={<button className="text-button" onClick={onAsk}>{t(language, 'askAI')} <ArrowRight size={15}/></button>} />
+    <SectionHeader eyebrow="FIELD PULSE" title={t(language, 'currentConditions')} />
     <div className="insights-grid"><Weather d={d} language={language}/>{hasCrops && <Soil d={d} language={language} />}{hasCrops && <Health d={d} language={language} />}</div>
-    {farmAnalysis && <div className={`farm-analysis-result ${farmAnalysis.source === 'gemini' ? '' : 'unavailable'}`}><div><Bot size={18}/><strong>Farm analysis</strong><small>{farmAnalysis.source === 'gemini' ? 'Gemini' : 'Gemini unavailable'}</small></div><p>{farmAnalysis.answer}</p></div>}
+    {farmAnalysis && <div className={`farm-analysis-result ${farmAnalysis.source === 'unavailable' ? 'unavailable' : ''}`}><div><Bot size={18}/><strong>Farm analysis</strong><small>{farmAnalysis.source === 'gemini' || farmAnalysis.source === 'gemini-fallback' || farmAnalysis.source === 'vertex-ai' ? 'Live AI' : farmAnalysis.source === 'mock-fallback' || farmAnalysis.source === 'mock' ? 'Demo fallback' : 'Unavailable'}</small></div><div className="farm-analysis-copy"><AssistantText text={farmAnalysis.answer}/></div></div>}
     <div className="content-grid"><section><SectionHeader eyebrow="RECOMMENDED FOR YOU" title={t(language, 'todaysActions')} />{advice?.items.slice(0, 2).map((item, i) => <ActionCard key={item.title} item={item} index={i}/>)}</section><section><SectionHeader eyebrow={t(language, 'yourFields').toUpperCase()} title={field?.name || t(language, 'fields')} action={<button className="text-button" onClick={onOnboard}>Manage <ArrowRight size={15}/></button>} /><div className="field-card"><FarmMap location={farm?.location} label={field ? `${field.name} · ${field.area_acres} ac` : 'No field recorded'} /><div className="field-details"><div><strong>{field?.name || t(language, 'livestockGroups')}</strong><span className="healthy"><span className="status-dot"/> {farm?.farm_type || 'crops'}</span></div><small>{field ? `${field.crop}${field.growth_stage ? ` · ${field.growth_stage}` : ''}` : (farm?.livestock || []).map(a => `${a.count} ${a.species}`).join(' · ')}</small><div className="field-meta"><span>Moisture <b>{hasCrops && d?.soil.moisture_percent != null ? `${Math.round(d.soil.moisture_percent)}%` : '—'}</b></span><span>{d?.satellite.source === 'isro-bhuvan-wms' ? 'ISRO WMS' : d?.satellite.source === 'isro-bhuvan-lulc-250k' ? 'ISRO LULC 250K' : d?.satellite.ndvi != null ? 'NDVI' : 'Satellite'} <b>{d?.satellite.source === 'isro-bhuvan-wms' ? 'Map layer' : d?.satellite.source === 'isro-bhuvan-lulc-250k' ? `${d.satellite.land_cover?.[0]?.share_percent ?? 0}%` : hasCrops && d?.satellite.ndvi != null ? d.satellite.ndvi.toFixed(2) : '—'}</b></span></div></div></div></section></div>
   </>
 }
@@ -170,7 +244,7 @@ function FarmMap({ location, label }: { location?: Location; label: string }) {
   }
   const normalizedState = (location?.state || '').toLowerCase().replace(/&/g, 'and').replace(/[^a-z]/g, '')
   const stateCode = stateCodes[normalizedState] || Object.entries(stateCodes).find(([name]) => normalizedState.endsWith(name))?.[1]
-  const [mapLayer, setMapLayer] = useState<'street' | 'lulc'>('lulc')
+  const [mapLayer, setMapLayer] = useState<'street' | 'lulc'>('street')
   const [wmsFailed, setWmsFailed] = useState(false)
   const streetMapUrl = hasCoordinates ? (() => {
     const latitude = location!.latitude
@@ -216,10 +290,10 @@ function Fields({ dashboard, language, onDiagnose, onOnboard }: { dashboard?: Da
   return <><div className="welcome"><div><span className="eyebrow">{t(language, 'fields').toUpperCase()}</span><h1>{t(language, 'fields')}</h1><p>{profile?.farm_name || profile?.farm_type}</p></div><button className="primary-button" onClick={onOnboard}><Plus size={17}/> {t(language, 'fieldName')}</button></div><div className="fields-grid"><div className="large-field field-card"><FarmMap location={profile?.location} label={`${profile?.fields?.[0]?.name || 'Main field'} · ${profile?.fields?.[0]?.area_acres || profile?.land_area_acres || 0} acres`} /><div className="field-details"><div><strong>{profile?.fields?.[0]?.name || t(language, 'livestockGroups')}</strong><span className="healthy"><span className="status-dot"/> {profile?.farm_type}</span></div><small>{profile?.fields?.map(field => `${field.crop} · ${field.name}`).join(' | ') || 'No crop fields recorded'}</small>{hasCrops && <div className="field-meta"><span>{t(language, 'soilMoisture')} <b>{dashboard?.soil.moisture_percent != null ? `${Math.round(dashboard.soil.moisture_percent)}%` : '—'}</b></span><span>{dashboard?.satellite.source === 'isro-bhuvan-wms' ? 'ISRO WMS' : dashboard?.satellite.source === 'isro-bhuvan-lulc-250k' ? 'ISRO LULC 250K' : dashboard?.satellite.ndvi != null ? 'NDVI' : 'Satellite'} <b>{dashboard?.satellite.source === 'isro-bhuvan-wms' ? 'Map layer' : dashboard?.satellite.source === 'isro-bhuvan-lulc-250k' ? `${dashboard.satellite.land_cover?.[0]?.share_percent ?? 0}%` : dashboard?.satellite.ndvi != null ? dashboard.satellite.ndvi.toFixed(2) : '—'}</b></span></div>}</div></div><div className="field-summary"><h3>{t(language, 'livestockGroups')}</h3>{(profile?.livestock || []).map((group, index) => <p key={`${group.species}-${index}`} className="animal-summary"><strong>{group.count} {group.species}</strong>{group.breed ? ` · ${group.breed}` : ''}{group.purpose ? ` · ${group.purpose}` : ''}</p>)}{!profile?.livestock?.length && <p>No animal groups recorded.</p>}{hasCrops && <button onClick={onDiagnose}><Camera size={18}/> {t(language, 'diagnoseCrop')} <ChevronRight size={16}/></button>}<button onClick={onOnboard}><Plus size={18}/> Manage farm <ChevronRight size={16}/></button></div></div></>
 }
 function Advice({ advice, language }: { advice?: Advisory; language: string }) { return <><div className="welcome"><div><span className="eyebrow">DECISION SUPPORT</span><h1>{t(language, 'farmAdvice')}</h1><p>{advice?.summary}</p></div><div className="advice-badge"><Bot size={18}/> Powered by AgriAI</div></div><div className="advice-list">{advice?.items.map((item, i) => <ActionCard key={item.title} item={item} index={i}/>)}</div></> }
-function Permissions({ language }: { language: string }) { const [state, setState] = useState({ location: false, camera: false, notifications: false }); const items = [{ key: 'location' as const, icon: MapPin, title: t(language, 'farmLocation'), text: t(language, 'locationAccess') }, { key: 'camera' as const, icon: Camera, title: t(language, 'diagnoseCrop'), text: t(language, 'cameraAccess') }, { key: 'notifications' as const, icon: Bell, title: t(language, 'permissions'), text: t(language, 'notificationAccess') }]; return <><div className="welcome"><div><span className="eyebrow">{t(language, 'permissions').toUpperCase()}</span><h1>{t(language, 'permissionsTitle')}</h1><p>{t(language, 'permissionsHelp')}</p></div><ShieldCheck className="hero-shield"/></div><div className="permission-card">{items.map(item => <div className="permission-row" key={item.key}><span className="permission-icon"><item.icon size={20}/></span><div><strong>{item.title}</strong><p>{item.text}</p></div><button className={`toggle ${state[item.key] ? 'on' : ''}`} onClick={() => setState(s => ({ ...s, [item.key]: !s[item.key] }))} aria-label={`Toggle ${item.title}`}><span/></button></div>)}<div className="privacy-box"><ShieldCheck size={18}/><span><strong>{t(language, 'privacyNotice')}</strong><br/><small>{t(language, 'privacyNotice')}</small></span></div></div></> }
+function Permissions({ language, notificationPermission, onRequestNotifications }: { language: string; notificationPermission: NotificationPermission | 'unsupported'; onRequestNotifications: () => void }) { const state = { location: false, camera: false, notifications: notificationPermission === 'granted' }; const items = [{ key: 'location' as const, icon: MapPin, title: t(language, 'farmLocation'), text: t(language, 'locationAccess') }, { key: 'camera' as const, icon: Camera, title: t(language, 'diagnoseCrop'), text: t(language, 'cameraAccess') }, { key: 'notifications' as const, icon: Bell, title: t(language, 'permissions'), text: notificationPermission === 'denied' ? 'Browser notifications are blocked. Change this site’s permission in your browser settings.' : notificationPermission === 'unsupported' ? 'This browser does not support desktop notifications.' : t(language, 'notificationAccess') }]; return <><div className="welcome"><div><span className="eyebrow">{t(language, 'permissions').toUpperCase()}</span><h1>{t(language, 'permissionsTitle')}</h1><p>{t(language, 'permissionsHelp')}</p></div><ShieldCheck className="hero-shield"/></div><div className="permission-card">{items.map(item => <div className="permission-row" key={item.key}><span className="permission-icon"><item.icon size={20}/></span><div><strong>{item.title}</strong><p>{item.text}</p></div>{item.key === 'notifications' ? <button className={`toggle ${state.notifications ? 'on' : ''}`} disabled={notificationPermission === 'denied' || notificationPermission === 'unsupported'} onClick={onRequestNotifications} aria-label={state.notifications ? 'Browser notifications enabled' : 'Enable browser notifications'}><span/></button> : <span className="permission-status">{item.key === 'camera' ? 'Used only when you choose a crop photo' : 'Not requested'}</span>}</div>)}<div className="privacy-box"><ShieldCheck size={18}/><span><strong>{t(language, 'privacyNotice')}</strong><br/><small>{t(language, 'privacyNotice')}</small></span></div></div></> }
 
 function Onboarding({ profile, authName, language: uiLanguage, onClose, onSaved }: { profile?: Profile | null; authName?: string; language: string; onClose: () => void; onSaved: (p: Profile) => void }) {
-  const [form, setForm] = useState({ farmer_name: authName || profile?.farmer_name || '', farm_name: profile?.farm_name || '', farm_type: profile?.farm_type || 'crops', field_name: profile?.fields?.[0]?.name || 'Main field', village: profile?.location.village || '', state: profile?.location.state || '', latitude: String(profile?.location.latitude ?? ''), longitude: String(profile?.location.longitude ?? ''), area: String(profile?.land_area_acres || ''), crop: profile?.crops[0] || 'Groundnut', variety: profile?.crop_variety || '', sowing_date: profile?.sowing_date || '', growth_stage: profile?.growth_stage || '', previous_crop: profile?.previous_crop || '', language: profile?.preferred_language || 'en', soil_type: profile?.soil_type || '', irrigation: profile?.irrigation || 'Rain-fed' })
+  const [form, setForm] = useState({ farmer_name: authName || profile?.farmer_name || '', farm_name: profile?.farm_name || '', farm_type: profile?.farm_type || 'crops', field_name: profile?.fields?.[0]?.name || 'Main field', village: profile?.location.village || '', state: profile?.location.state || '', latitude: String(profile?.location.latitude ?? ''), longitude: String(profile?.location.longitude ?? ''), area: String(profile?.land_area_acres || ''), crop: profile?.crops[0] || 'Groundnut', variety: profile?.crop_variety || '', sowing_date: profile?.sowing_date || '', growth_stage: profile?.growth_stage || '', previous_crop: profile?.previous_crop || '', language: uiLanguage || profile?.preferred_language || 'en', soil_type: profile?.soil_type || '', irrigation: profile?.irrigation || 'Rain-fed' })
   useEffect(() => { if (authName) setForm(current => ({ ...current, farmer_name: authName })) }, [authName])
   const [animals, setAnimals] = useState((profile?.livestock || []).map(group => ({ species: group.species, count: String(group.count), breed: group.breed || '', purpose: group.purpose || '' })))
   const [locationMessage, setLocationMessage] = useState('Set your farm location: search your village/town or use this device’s location. No default location is set.')
@@ -294,8 +368,58 @@ function DiagnosisModal({ crop, language, onClose }: { crop?: string; language: 
       setResult({ diagnosis: error instanceof Error ? error.message : 'Crop diagnosis failed. Please try again.', confidence: null, severity: 'low', actions: [], source: 'unavailable' })
     } finally { setLoading(false) }
   }
-  return <div className="modal-backdrop"><div className="modal diagnosis-modal"><div className="modal-heading"><div><span className="eyebrow">{t(language, 'diagnosisTitle').toUpperCase()}</span><h2>{t(language, 'diagnosisTitle')}</h2><p>{t(language, 'diagnosisHelp')}</p></div><button onClick={onClose} className="close-button"><X size={19}/></button></div>{result ? <div className="diagnosis-result"><div className="result-icon"><Leaf size={27}/></div><div className="result-title"><span className={`priority ${result.source === 'unavailable' ? 'medium' : result.severity}`}>{result.source === 'unavailable' ? 'Unavailable' : `${result.severity} attention`}</span><h3>{result.diagnosis}</h3><p>{result.confidence != null ? `${Math.round(result.confidence * 100)}% confidence · ` : ''}{result.source === 'gemini-vision' ? 'Gemini image analysis' : result.source}</p></div>{result.actions.length > 0 && <><h4>{t(language, 'nextSteps')}</h4><ul>{result.actions.map(a => <li key={a}><Check size={16}/>{a}</li>)}</ul></>}<button className="secondary-button full" onClick={() => setResult(undefined)}>{t(language, 'checkAgain')}</button></div> : <form onSubmit={submit}><label className="upload-box"><Upload size={25}/><strong>{file?.name || t(language, 'uploadPhoto')}</strong><small>PNG or JPG · optional · 4 MB max</small><input type="file" accept="image/png,image/jpeg,image/webp" capture="environment" onChange={e => { const selected = e.target.files?.[0]; if (selected && selected.size > 4 * 1024 * 1024) { e.target.value = ''; setFile(undefined); setFileError('Image must be 4 MB or smaller.'); return } setFileError(''); setFile(selected) }}/></label>{fileError && <p className="auth-error">{fileError}</p>}<label>{t(language, 'describeSymptoms')}<textarea required={!file} value={symptoms} onChange={e => setSymptoms(e.target.value)} placeholder="e.g. Yellow spots on the lower leaves..." rows={3}/></label><div className="form-actions"><button type="button" className="secondary-button" onClick={onClose}>{t(language, 'cancel')}</button><button className="primary-button" type="submit" disabled={loading}><Bot size={16}/>{loading ? 'Analyzing with Gemini…' : 'Analyze with Gemini'}</button></div></form>}</div></div>
+  return <div className="modal-backdrop"><div className="modal diagnosis-modal"><div className="modal-heading"><div><span className="eyebrow">{t(language, 'diagnosisTitle').toUpperCase()}</span><h2>{t(language, 'diagnosisTitle')}</h2><p>{t(language, 'diagnosisHelp')}</p></div><button onClick={onClose} className="close-button"><X size={19}/></button></div>{result ? <div className="diagnosis-result"><div className="result-icon"><Leaf size={27}/></div><div className="result-title"><span className={`priority ${result.source === 'unavailable' ? 'medium' : result.severity}`}>{result.source === 'unavailable' ? 'Unavailable' : `${result.severity} attention`}</span><h3>{result.diagnosis}</h3><p>{result.confidence != null ? `${Math.round(result.confidence * 100)}% confidence · ` : ''}{result.source === 'gemini-vision' ? 'Gemini image analysis' : result.source}</p></div>{result.actions.length > 0 && <><h4>{t(language, 'nextSteps')}</h4><ul>{result.actions.map(a => <li key={a}><Check size={16}/>{a}</li>)}</ul></>}<button className="secondary-button full" onClick={() => setResult(undefined)}>{t(language, 'checkAgain')}</button></div> : <form onSubmit={submit}><label className="upload-box"><Upload size={25}/><strong>{file?.name || t(language, 'uploadPhoto')}</strong><small>PNG or JPG · optional · 4 MB max</small><input type="file" accept="image/png,image/jpeg,image/webp" capture="environment" onChange={e => { const selected = e.target.files?.[0]; if (selected && selected.size > 4 * 1024 * 1024) { e.target.value = ''; setFile(undefined); setFileError('Image must be 4 MB or smaller.'); return } setFileError(''); setFile(selected) }}/></label>{fileError && <p className="auth-error">{fileError}</p>}<label>{t(language, 'describeSymptoms')}<div className="voice-textarea-row"><textarea required={!file} value={symptoms} onChange={e => setSymptoms(e.target.value)} placeholder="e.g. Yellow spots on the lower leaves..." rows={3}/><VoiceInputButton language={language} onTranscript={value => setSymptoms(current => `${current.trim()}${current.trim() ? ' ' : ''}${value}`)}/></div></label><div className="form-actions"><button type="button" className="secondary-button" onClick={onClose}>{t(language, 'cancel')}</button><button className="primary-button" type="submit" disabled={loading}><Bot size={16}/>{loading ? 'Analyzing with Gemini…' : 'Analyze with Gemini'}</button></div></form>}</div></div>
 }
+function VoiceInputButton({ language, onTranscript }: { language: string; onTranscript: (transcript: string) => void }) {
+  const [listening, setListening] = useState(false)
+  const [message, setMessage] = useState('')
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
+  useEffect(() => () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.onend = null
+      recognitionRef.current.onerror = null
+      recognitionRef.current.onresult = null
+      recognitionRef.current.abort()
+      recognitionRef.current = null
+    }
+  }, [])
+  const toggle = () => {
+    if (listening) { recognitionRef.current?.stop(); setListening(false); return }
+    if (!window.isSecureContext) { setMessage('Voice input needs HTTPS (localhost is supported).'); return }
+    const speechWindow = window as Window & { SpeechRecognition?: SpeechRecognitionConstructor; webkitSpeechRecognition?: SpeechRecognitionConstructor }
+    const Recognition = speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition
+    if (!Recognition) { setMessage('Voice input is unavailable in this browser. Try Chrome or enter text.'); return }
+    const recognition = new Recognition()
+    recognition.lang = speechLocales[language] || 'en-IN'
+    recognition.interimResults = false
+    recognition.continuous = false
+    recognition.onresult = event => {
+      const transcript = Array.from(event.results).map(result => result[0]?.transcript || '').join(' ').trim()
+      if (transcript) { onTranscript(transcript); setMessage('') }
+    }
+    recognition.onerror = event => {
+      const errors: Record<string, string> = {
+        'not-allowed': 'Allow microphone access in your browser to dictate.',
+        'service-not-allowed': 'Speech recognition is blocked by this browser.',
+        'language-not-supported': 'This browser does not support recognition for the selected language.',
+        'no-speech': 'No speech was detected. Tap the mic and try again.',
+        network: 'Speech recognition needs an internet connection.',
+      }
+      setMessage(errors[event.error] || 'Voice input stopped. Please try again.')
+      setListening(false)
+    }
+    recognition.onend = () => { setListening(false); recognitionRef.current = null }
+    recognitionRef.current = recognition
+    setMessage('')
+    try { recognition.start(); setListening(true) }
+    catch { recognitionRef.current = null; setListening(false); setMessage('Could not start the microphone. Please try again.') }
+  }
+  return <span className={`voice-control ${listening ? 'listening' : ''}`}>
+    <button type="button" className="voice-button" onClick={toggle} aria-label={listening ? 'Stop voice input' : `Dictate in ${languages.find(item => item.code === language)?.label || 'selected language'}`} aria-pressed={listening} title={listening ? 'Stop listening' : 'Speak your text'}>{listening ? <MicOff size={18}/> : <Mic size={18}/>}</button>
+    {(message || listening) && <span className="voice-status" role="status">{message || `Listening in ${speechLocales[language] || 'en-IN'}…`}</span>}
+  </span>
+}
+
 function Assistant({ crop, language, onClose }: { crop?: string; language: string; onClose: () => void }) {
   const [question, setQuestion] = useState('')
   const [messages, setMessages] = useState<{ question: string; answer?: string; source?: string }[]>([])
@@ -313,13 +437,14 @@ function Assistant({ crop, language, onClose }: { crop?: string; language: strin
       const result = await api.ask(submittedQuestion, crop)
       setMessages(current => current.map((message, index) => index === messageIndex ? { ...message, answer: result.answer, source: result.source } : message))
     }
-    catch {
-      setMessages(current => current.map((message, index) => index === messageIndex ? { ...message, answer: 'Could not reach the AgriAI backend. Start the backend container and try again.', source: 'unavailable' } : message))
+    catch (error) {
+      const detail = error instanceof Error ? error.message : 'AgriAI could not answer this request. Please try again.'
+      setMessages(current => current.map((message, index) => index === messageIndex ? { ...message, answer: detail, source: 'unavailable' } : message))
     }
     finally { setLoading(false) }
   }
   const ask = (e: React.FormEvent) => { e.preventDefault(); void sendQuestion(question) }
-  return <div className="assistant-panel"><div className="assistant-head"><div><span className="assistant-avatar"><Bot size={20}/></span><div><strong>{t(language, 'askAI')}</strong><small>{t(language, 'preferredLanguage')}</small></div></div><button onClick={onClose}><X size={19}/></button></div><div className="assistant-body"><div className="bot-message"><span className="assistant-avatar tiny"><Bot size={15}/></span><p>{t(language, 'assistantGreeting')}</p></div>{messages.map((message, index) => <div className="conversation-turn" key={`${index}-${message.question}`}><div className="question-bubble">{message.question}</div>{message.answer ? <div className="answer-row"><span className="assistant-avatar tiny"><Bot size={15}/></span><div className="assistant-reply"><AssistantText text={message.answer}/><small className="answer-source">{message.source === 'unavailable' ? 'AI unavailable' : `Answered by ${message.source}`}</small></div></div> : <div className="answer-row"><span className="assistant-avatar tiny"><Bot size={15}/></span><div className="assistant-reply pending-reply">Thinking…</div></div>}</div>)}{messages.length === 0 && <div className="suggestions"><button type="button" disabled={loading} onClick={() => void sendQuestion('Should I irrigate today?')}>Should I irrigate today?</button><button type="button" disabled={loading} onClick={() => void sendQuestion('How can I improve my soil?')}>Improve my soil</button></div>}<div ref={conversationEnd}/></div><form className="assistant-input" onSubmit={ask}><input value={question} onChange={e => setQuestion(e.target.value)} placeholder={loading ? 'Waiting for Gemini…' : t(language, 'questionPlaceholder')} /><button aria-label="Send question" disabled={loading || !question.trim()}><ArrowRight size={17}/></button></form></div>
+  return <div className="assistant-panel"><div className="assistant-head"><div><span className="assistant-avatar"><Bot size={20}/></span><div><strong>{t(language, 'askAI')}</strong><small>{t(language, 'preferredLanguage')}</small></div></div><button onClick={onClose}><X size={19}/></button></div><div className="assistant-body"><div className="bot-message"><span className="assistant-avatar tiny"><Bot size={15}/></span><p>{t(language, 'assistantGreeting')}</p></div>{messages.map((message, index) => <div className="conversation-turn" key={`${index}-${message.question}`}><div className="question-bubble">{message.question}</div>{message.answer ? <div className="answer-row"><span className="assistant-avatar tiny"><Bot size={15}/></span><div className="assistant-reply"><AssistantText text={message.answer}/>    <small className="answer-source">{message.source === 'unavailable' ? 'AI unavailable' : message.source === 'mock-fallback' || message.source === 'mock' ? 'Demo fallback advice' : message.source === 'gemini-fallback' ? 'Answered by Gemini API fallback' : `Answered by ${message.source}`}</small></div></div> : <div className="answer-row"><span className="assistant-avatar tiny"><Bot size={15}/></span><div className="assistant-reply pending-reply">Thinking…</div></div>}</div>)}{messages.length === 0 && <div className="suggestions"><button type="button" disabled={loading} onClick={() => void sendQuestion('Should I irrigate today?')}>Should I irrigate today?</button><button type="button" disabled={loading} onClick={() => void sendQuestion('How can I improve my soil?')}>Improve my soil</button></div>}<div ref={conversationEnd}/></div><form className="assistant-input" onSubmit={ask}><input value={question} onChange={e => setQuestion(e.target.value)} placeholder={loading ? 'Waiting for Gemini…' : t(language, 'questionPlaceholder')} /><VoiceInputButton language={language} onTranscript={value => setQuestion(current => `${current.trim()}${current.trim() ? ' ' : ''}${value}`)}/><button aria-label="Send question" disabled={loading || !question.trim()}><ArrowRight size={17}/></button></form></div>
 }
 
 function AssistantText({ text }: { text: string }) {

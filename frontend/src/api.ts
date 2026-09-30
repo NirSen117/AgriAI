@@ -3,9 +3,10 @@ export type FarmType = 'crops' | 'livestock' | 'mixed'
 export type LivestockGroup = { species: 'cattle'|'buffalo'|'goat'|'sheep'|'poultry'|'pig'|'other'; count: number; breed?: string; purpose?: string }
 export type FarmField = { name: string; area_acres: number; crop: string; crop_variety?: string; sowing_date?: string; growth_stage?: string; irrigation?: string; soil_type?: string }
 export type Profile = { farmer_name: string; farm_name?: string; location: Location; farm_type?: FarmType; land_area_acres: number; soil_type?: string; irrigation?: string; crops: string[]; fields?: FarmField[]; livestock?: LivestockGroup[]; preferred_language?: string; crop_variety?: string; sowing_date?: string; growth_stage?: string; previous_crop?: string }
-export type Dashboard = { profile: Profile | null; weather: { temperature_c: number; humidity_percent: number; rainfall_mm: number; rainfall_probability: number; wind_kph: number; source: string }; soil: { ph?: number | null; moisture_percent?: number | null; nitrogen_index?: number | null; organic_carbon_percent?: number | null; source: string }; satellite: { ndvi?: number | null; crop_health: 'poor'|'fair'|'good'|'excellent'; cloud_cover_percent?: number | null; source: string }; data_quality: string }
+export type Dashboard = { profile: Profile | null; weather: { temperature_c: number; humidity_percent: number; rainfall_mm: number; rainfall_probability: number; wind_kph: number; source: string }; soil: { ph?: number | null; moisture_percent?: number | null; nitrogen_index?: number | null; organic_carbon_percent?: number | null; source: string }; satellite: { ndvi?: number | null; crop_health: 'poor'|'fair'|'good'|'excellent'|'unavailable'; land_cover?: { code: string; label: string; area_sq_km: number; share_percent: number }[]; cloud_cover_percent?: number | null; observed_at?: string; availability_message?: string | null; source: string }; data_quality: string }
 export type Advisory = { summary: string; items: { priority: 'high'|'medium'|'low'; title: string; action: string; reason: string }[]; source: string }
 export type Diagnosis = { diagnosis: string; confidence?: number | null; severity: 'low'|'medium'|'high'; actions: string[]; source: string }
+export type Interoperability = { schema: string; sources: { name: string; state: string; status: string; categories: string[] }[]; normalized_count: number; data_quality: string; last_sync: string }
 
 const profileKey = 'agriai-farm-profile'
 const localProfile = (): Profile | null => {
@@ -15,7 +16,7 @@ const unavailableDashboard = (profile: Profile | null): Dashboard => ({
   profile,
   weather: { temperature_c: 0, humidity_percent: 0, rainfall_mm: 0, rainfall_probability: 0, wind_kph: 0, source: 'unavailable' },
   soil: { source: 'unavailable' },
-  satellite: { crop_health: 'fair', source: 'unavailable' }, data_quality: 'unavailable',
+  satellite: { crop_health: 'unavailable', source: 'unavailable' }, data_quality: 'unavailable',
 })
 
 async function liveWeather(location: Location) {
@@ -43,7 +44,21 @@ const advisory: Advisory = { summary: 'Your crops are looking healthy. Keep an e
 ] }
 
 async function request<T>(path: string, options?: RequestInit, fallback?: T): Promise<T> {
-  try { const response = await fetch(`/api${path}`, { headers: { 'Content-Type': 'application/json' }, ...options }); if (!response.ok) throw new Error('API unavailable'); return await response.json() as T } catch { if (fallback !== undefined) return fallback; throw new Error('Unable to connect to AgriAI') }
+  let response: Response
+  try {
+    response = await fetch(`/api${path}`, { headers: { 'Content-Type': 'application/json' }, ...options })
+  } catch (error) {
+    if (fallback !== undefined) return fallback
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    throw new Error('Could not connect to the AgriAI backend. Check that Docker is running and try again.')
+  }
+  if (!response.ok) {
+    if (fallback !== undefined) return fallback
+    const body = await response.json().catch(() => undefined) as { detail?: unknown } | undefined
+    const detail = typeof body?.detail === 'string' ? body.detail : undefined
+    throw new Error(detail || `AgriAI request failed (HTTP ${response.status}). Check the backend and proxy logs.`)
+  }
+  return await response.json() as T
 }
 export const api = {
   dashboard: async (): Promise<Dashboard> => {
@@ -82,4 +97,5 @@ export const api = {
   ask: (question: string, crop?: string) => request<{ answer: string; source: string }>('/ai/ask', { method: 'POST', body: JSON.stringify({ question, crop }) }),
   diagnose: (symptoms: string, crop?: string, image_url?: string) => request<Diagnosis>('/disease/analyze', { method: 'POST', body: JSON.stringify({ symptoms, crop, image_url }) }),
   permissions: () => request<{ location: boolean; camera: boolean; notifications: boolean; explanation: string }>('/permissions', undefined, { location: false, camera: false, notifications: false, explanation: 'Permissions are optional and only requested after your action.' }),
+  interoperability: () => request<Interoperability>('/interoperability'),
 }

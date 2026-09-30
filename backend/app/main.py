@@ -14,13 +14,13 @@ from fastapi.responses import JSONResponse
 from .advisory import build_advisory, localize_advisory
 from .config import get_settings
 from .providers import (
-    CopernicusSatelliteProvider, GeminiAIProvider, GeminiDiseaseProvider, VertexAIProvider,
-    MockAIProvider, MockDiseaseProvider, MockSatelliteProvider, MockSoilProvider, MockWeatherProvider,
+    GeminiAIProvider, GeminiDiseaseProvider, VertexAIProvider,
+    BhuvanLulcProvider, MockSatelliteProvider, MockSoilProvider, MockWeatherProvider,
     OpenMeteoSoilProvider, OpenMeteoWeatherProvider,
 )
 from .schemas import (AdvisoryItem, AdvisoryResponse, AskRequest, AskResponse, DashboardResponse, DiagnosisRequest,
                       DiagnosisResponse, FarmProfile, HealthResponse, OnboardingResponse, PermissionResponse,
-                      Location, ProviderStatus, SystemStatus)
+                      Location, ProviderStatus, SatelliteObservation, SystemStatus)
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -41,8 +41,16 @@ def _gemini_failure_message(exc: Exception) -> str:
         return "Gemini rate limit or free-tier quota reached. Wait for quota to reset, then try again."
     if status == 400:
         return "Gemini rejected the API key or request (HTTP 400). Check the key, model, image format, and request size."
+    if status == 503:
+        return "Gemini is temporarily unavailable (HTTP 503). Your request reached Google, but its service could not process it. Please try again shortly."
+    if status in (500, 502, 504):
+        return f"Gemini returned a temporary server error (HTTP {status}). Please try again shortly."
+    if status == 408:
+        return "Gemini timed out while processing the request (HTTP 408). Please try again shortly."
     if isinstance(exc, URLError):
         return "The backend cannot connect to Gemini. Check Docker's internet access and try again."
+    if isinstance(exc, TimeoutError):
+        return "Gemini took too long to respond. Try again; if it repeats, check Docker's internet connection."
     return "Gemini request failed. Check the backend logs for the error details."
 
 
@@ -84,20 +92,22 @@ weather = MockWeatherProvider() if settings.mock_mode else OpenMeteoWeatherProvi
 soil = MockSoilProvider() if settings.mock_mode else OpenMeteoSoilProvider(
     settings.open_meteo_base_url, settings.http_timeout_seconds
 )
-copernicus_configured = bool(settings.copernicus_client_id and settings.copernicus_client_secret)
-satellite = CopernicusSatelliteProvider(settings.copernicus_client_id, settings.copernicus_client_secret,
-                                       settings.http_timeout_seconds) if copernicus_configured else MockSatelliteProvider()
+satellite = MockSatelliteProvider() if settings.mock_mode else (
+    BhuvanLulcProvider(settings.bhuvan_api_token, settings.bhuvan_lulc_api_url,
+                       settings.bhuvan_lulc_year, settings.http_timeout_seconds)
+    if settings.bhuvan_api_token else None
+)
 if settings.vertex_ai_project:
     try:
         ai = VertexAIProvider(settings.vertex_ai_project, settings.vertex_ai_location, settings.vertex_ai_model)
     except Exception:
-        logger.exception("Vertex AI initialization failed; using mock AI fallback")
-        ai = MockAIProvider()
+        logger.exception("Vertex AI initialization failed; live AI is unavailable")
+        ai = None
 elif settings.gemini_api_key:
     ai = GeminiAIProvider(settings.gemini_api_key, settings.gemini_model, settings.http_timeout_seconds)
 else:
-    ai = MockAIProvider()
-disease = GeminiDiseaseProvider(settings.gemini_api_key, settings.gemini_model, settings.http_timeout_seconds) if settings.gemini_api_key else MockDiseaseProvider()
+    ai = None
+disease = GeminiDiseaseProvider(settings.gemini_api_key, settings.gemini_model, settings.http_timeout_seconds) if settings.gemini_api_key else None
 def _connect() -> sqlite3.Connection:
     path = Path(settings.database_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -128,15 +138,17 @@ def status() -> SystemStatus:
                        message="Deterministic mock provider active" if settings.mock_mode else "Open-Meteo public forecast API"),
         ProviderStatus(name="soil", available=True, mode="mock" if settings.mock_mode else "live",
                        message="Deterministic mock provider active" if settings.mock_mode else "Open-Meteo modelled soil moisture (surface layers; not a sensor)"),
-        ProviderStatus(name="satellite", available=True,
-                       mode="live" if copernicus_configured else "mock",
-                       message="Copernicus Sentinel-2 NDVI near farm pin" if copernicus_configured else "Copernicus credentials not configured; demo field-health values active"),
-        ProviderStatus(name="ai", available=True,
-                       mode="live" if isinstance(ai, (GeminiAIProvider, VertexAIProvider)) else "mock",
-                       message="Vertex AI Gemini configured; mock fallback activates on failure" if isinstance(ai, VertexAIProvider) else f"Gemini key configured for {settings.gemini_model}; mock fallback activates on failure" if isinstance(ai, GeminiAIProvider) else "Mock AI fallback active; no live AI provider is configured"),
-        ProviderStatus(name="disease", available=True,
-                       mode="live" if isinstance(disease, GeminiDiseaseProvider) else "mock",
-                       message="Gemini key configured; mock fallback activates on failure" if isinstance(disease, GeminiDiseaseProvider) else "Mock disease fallback active; no Gemini key is configured"),
+        ProviderStatus(name="satellite", available=settings.mock_mode or satellite is not None,
+                       mode="mock" if settings.mock_mode else "live" if satellite else "fallback",
+                       message=("Demo satellite values active" if settings.mock_mode else
+                                "Bhuvan LULC AOI statistics configured; results are historical land-cover context" if satellite else
+                                "Bhuvan API token missing; add BHUVAN_API_TOKEN; public Bhuvan WMS map remains available")),
+        ProviderStatus(name="ai", available=isinstance(ai, (GeminiAIProvider, VertexAIProvider)),
+                       mode="live" if isinstance(ai, (GeminiAIProvider, VertexAIProvider)) else "fallback",
+                       message="Vertex AI configured; access is checked when an AI action runs" if isinstance(ai, VertexAIProvider) else f"Gemini key configured for {settings.gemini_model}; access is checked when an AI action runs" if isinstance(ai, GeminiAIProvider) else "Gemini unavailable: no live AI provider is configured"),
+        ProviderStatus(name="disease", available=isinstance(disease, GeminiDiseaseProvider),
+                       mode="live" if isinstance(disease, GeminiDiseaseProvider) else "fallback",
+                       message="Gemini key configured; access is checked when image diagnosis runs" if isinstance(disease, GeminiDiseaseProvider) else "Gemini unavailable: no API key is configured"),
     ]
     return SystemStatus(status="ok", mock_mode=settings.mock_mode, providers=providers)
 
@@ -180,6 +192,22 @@ def _location() -> Location:
     return profile.location if profile else Location(latitude=20.5937, longitude=78.9629)
 
 
+def _satellite_unavailable_message(exc: Exception) -> str:
+    if isinstance(exc, HTTPError):
+        if exc.code in (401, 403):
+            return "Bhuvan rejected the API token (HTTP 401/403). Copy the current daily token into BHUVAN_API_TOKEN and recreate the backend container."
+        if exc.code == 404:
+            return "Bhuvan API endpoint was not found (HTTP 404). Check BHUVAN_LULC_API_URL."
+        if exc.code == 414:
+            return "Bhuvan rejected the AOI URL as too long (HTTP 414)."
+        return f"Bhuvan API request failed with HTTP {exc.code}. Check the API endpoint and token."
+    if isinstance(exc, ValueError):
+        return f"Bhuvan response could not be read: {exc}"
+    if isinstance(exc, (URLError, TimeoutError)):
+        return "The backend could not reach the Bhuvan API. Check Docker's internet connection and try again."
+    return f"Bhuvan API request failed ({type(exc).__name__}). Check backend logs."
+
+
 @app.get("/api/dashboard", response_model=DashboardResponse, tags=["farm"])
 def dashboard() -> DashboardResponse:
     location = _location()
@@ -192,10 +220,21 @@ def dashboard() -> DashboardResponse:
     except Exception:
         soil_observation = MockSoilProvider().get_soil(location)
     try:
-        satellite_observation = satellite.get_observation(location)
-    except Exception:
-        satellite_observation = MockSatelliteProvider().get_observation(location)
-    live_providers = sum(source in {"open-meteo", "open-meteo-modelled", "copernicus-sentinel-2-near-location"}
+        satellite_observation = satellite.get_observation(location) if satellite and profile else SatelliteObservation(
+            source="unavailable", crop_health="unavailable",
+            availability_message=("Save your farm coordinates to request Bhuvan AOI statistics." if satellite and not profile
+                                 else "Bhuvan API token is not configured in the backend environment."),
+            observed_at=datetime.now(timezone.utc)
+        )
+    except Exception as exc:
+        message = _satellite_unavailable_message(exc)
+        status_code = exc.code if isinstance(exc, HTTPError) else "n/a"
+        logger.warning("Bhuvan LULC request failed (exception=%s, http_status=%s, reason=%s)",
+                       type(exc).__name__, status_code, message)
+        satellite_observation = SatelliteObservation(source="unavailable", crop_health="unavailable",
+                                                     availability_message=message,
+                                                     observed_at=datetime.now(timezone.utc))
+    live_providers = sum(source in {"open-meteo", "open-meteo-modelled", "isro-bhuvan-lulc-250k"}
                          for source in (weather_observation.source, soil_observation.source, satellite_observation.source))
     data_quality = "live" if live_providers == 3 else "mixed" if live_providers else "mock"
     return DashboardResponse(profile=profile, weather=weather_observation, soil=soil_observation,
@@ -292,3 +331,27 @@ def permissions() -> PermissionResponse:
 @app.get("/api/demo", response_model=DashboardResponse, tags=["system"])
 def demo() -> DashboardResponse:
     return dashboard()
+
+
+@app.get("/api/interoperability", tags=["interoperability"])
+def interoperability() -> dict:
+    states = ["Karnataka", "Maharashtra", "Tamil Nadu"]
+    timestamp = datetime.now(timezone.utc).isoformat()
+    return {
+        "schema": "AgricultureRecord/v1",
+        "sources": [
+            {"name": f"{state} demo adapter", "state": state, "status": "connected",
+             "categories": ["crops", "soil", "weather", "field observations"]}
+            for state in states
+        ],
+        "records": [
+            {"source": f"{state} demo adapter", "state": state, "district": "Demo district",
+             "location": {"type": "Point", "coordinates": [78.9629, 20.5937]},
+             "crop": "Groundnut", "observations": {"soil": "normalized", "weather": "normalized",
+             "field": "normalized"}, "timestamp": timestamp, "quality": "simulated"}
+            for state in states
+        ],
+        "normalized_count": len(states),
+        "data_quality": "simulated demo records",
+        "last_sync": timestamp,
+    }

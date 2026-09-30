@@ -1,16 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, ArrowRight, Bell, Bot, Camera, Check, ChevronRight, CloudSun, Droplets, Gauge, Home, Leaf, MapPin, Menu, MessageCircle, Plus, ShieldCheck, Sprout, Sun, Thermometer, Upload, UserRound, Wind, X } from 'lucide-react'
-import { api, Advisory, Dashboard, Diagnosis, Profile } from './api'
+import { api, Advisory, Dashboard, Diagnosis, Interoperability, Location, Profile } from './api'
 import { AuthModal } from './AuthModal'
 import { AuthUser, firebaseAuth } from './firebaseAuth'
 import { languages, t } from './i18n'
 
-type Page = 'overview' | 'fields' | 'advice' | 'permissions'
-const nav = [{ id: 'overview' as Page, key: 'overview' as const, icon: Home }, { id: 'fields' as Page, key: 'fields' as const, icon: Sprout }, { id: 'advice' as Page, key: 'advice' as const, icon: Leaf }, { id: 'permissions' as Page, key: 'permissions' as const, icon: ShieldCheck }]
+type Page = 'overview' | 'fields' | 'advice' | 'network' | 'permissions'
+const nav = [{ id: 'overview' as Page, key: 'overview' as const, icon: Home }, { id: 'fields' as Page, key: 'fields' as const, icon: Sprout }, { id: 'advice' as Page, key: 'advice' as const, icon: Leaf }, { id: 'network' as Page, label: 'Data network', icon: ShieldCheck }, { id: 'permissions' as Page, key: 'permissions' as const, icon: ShieldCheck }]
 const dataNotice = (dashboard: Dashboard) => {
   const weather = dashboard.weather.source === 'open-meteo' ? 'Live weather' : dashboard.weather.source === 'mock-weather' ? 'Demo weather (mock mode)' : dashboard.weather.source === 'location-required' ? 'Set your farm location to get local weather' : 'Weather unavailable right now'
   const soil = dashboard.soil.source.includes('open-meteo') ? 'modelled soil moisture' : 'demo soil values'
-  const field = dashboard.satellite.source.startsWith('copernicus') ? 'Sentinel-2 NDVI near the farm pin' : 'demo field-health estimate'
+  const field = dashboard.satellite.source.startsWith('isro-bhuvan') ? 'ISRO/Bhuvan land-cover context' : dashboard.satellite.source === 'mock-satellite' ? 'demo field-health estimate' : 'satellite field-health unavailable'
   return `${weather} · ${soil} · ${field}`
 }
 
@@ -67,7 +67,7 @@ function App() {
     <aside className="sidebar">
       <Logo />
       <div className="farm-switcher"><div className="avatar">{firstName[0]}</div><div><strong>{profile?.farm_name || 'My farm'}</strong><small>{profile?.location.village || 'Set up your farm'}</small></div><ChevronRight size={16}/></div>
-      <nav>{nav.map(item => <button className={page === item.id ? 'active' : ''} onClick={() => setPage(item.id)} key={item.id}><item.icon size={19}/><span>{t(language, item.key)}</span></button>)}</nav>
+      <nav>{nav.map(item => <button className={page === item.id ? 'active' : ''} onClick={() => setPage(item.id)} key={item.id}><item.icon size={19}/><span>{item.key ? t(language, item.key) : item.label}</span></button>)}</nav>
       <div className="sidebar-bottom"><button onClick={() => setShowOnboarding(true)} className="outline-button"><Plus size={17}/> Add field</button><small className="privacy"><ShieldCheck size={14}/> Your data stays yours</small></div>
     </aside>
     <main>
@@ -77,10 +77,11 @@ function App() {
         {page === 'overview' && <Overview dashboard={dashboard} advice={advice} farmAnalysis={farmAnalysis} analysisLoading={analysisLoading} language={language} greetingName={firstName} onDiagnose={() => setDiagnosis(true)} onAsk={() => setAssistant(true)} onOnboard={() => setShowOnboarding(true)} onAnalyze={() => runAnalysis()} />}
         {page === 'fields' && <Fields dashboard={dashboard} language={language} onDiagnose={() => setDiagnosis(true)} onOnboard={() => setShowOnboarding(true)} />}
         {page === 'advice' && <Advice advice={advice} language={language} />}
+        {page === 'network' && <DataNetwork />}
         {page === 'permissions' && <Permissions language={language} />}
       </div>
     </main>
-    <div className="mobile-nav">{nav.slice(0, 4).map(item => <button className={page === item.id ? 'active' : ''} onClick={() => setPage(item.id)} key={item.id}><item.icon size={18}/><span>{t(language, item.key)}</span></button>)}</div>
+    <div className="mobile-nav">{nav.slice(0, 4).map(item => <button className={page === item.id ? 'active' : ''} onClick={() => setPage(item.id)} key={item.id}><item.icon size={18}/><span>{item.key ? t(language, item.key) : item.label}</span></button>)}</div>
     {showOnboarding && <Onboarding profile={profile} authName={authUser.displayName} language={language} onClose={() => setShowOnboarding(false)} onSaved={async p => { setShowOnboarding(false); await runAnalysis(false); setDashboard(d => d ? { ...d, profile: p } : d) }} />}
     {diagnosis && <DiagnosisModal crop={profile?.crops[0]} language={language} onClose={() => setDiagnosis(false)} />}
     {assistant && <Assistant crop={profile?.crops[0]} language={language} onClose={() => setAssistant(false)} />}
@@ -89,6 +90,17 @@ function App() {
 }
 
 function Logo() { return <div className="logo"><span className="logo-mark"><Sprout size={20}/></span><span>agri<strong>ai</strong></span></div> }
+function DataNetwork() {
+  const [network, setNetwork] = useState<Interoperability>()
+  useEffect(() => { api.interoperability().then(setNetwork).catch(() => undefined) }, [])
+  return <section className="network-page">
+    <SectionHeader eyebrow="DIGITAL PUBLIC GOOD" title="Data network" />
+    <p className="muted">State-specific agricultural records are normalized before they reach the shared intelligence layer.</p>
+    <div className="network-flow"><strong>Karnataka</strong><span>→</span><strong>Maharashtra</strong><span>→</span><strong>Tamil Nadu</strong><span>→</span><strong>Common Agriculture Schema</strong><span>→</span><strong>Localized advisory</strong></div>
+    <div className="network-grid">{network?.sources.map(source => <article className="network-card" key={source.state}><span className="status-dot green"/><strong>{source.name}</strong><small>{source.state} · {source.categories.join(' · ')}</small><small>Demo adapter · normalized</small></article>)}</div>
+    <div className="network-summary"><strong>{network?.normalized_count || 0}</strong><span>records normalized into {network?.schema || 'AgricultureRecord/v1'}</span><small>Data quality: {network?.data_quality || 'loading'}</small></div>
+  </section>
+}
 function SectionHeader({ eyebrow, title, action }: { eyebrow?: string; title: string; action?: React.ReactNode }) { return <div className="section-header">{<div>{eyebrow && <span className="eyebrow">{eyebrow}</span>}<h2>{title}</h2></div>}{action}</div> }
 function Overview({ dashboard, advice, farmAnalysis, analysisLoading, language, greetingName, onDiagnose, onAsk, onOnboard, onAnalyze }: { dashboard?: Dashboard; advice?: Advisory; farmAnalysis?: { answer: string; source: string }; analysisLoading: boolean; language: string; greetingName: string; onDiagnose: () => void; onAsk: () => void; onOnboard: () => void; onAnalyze: () => void }) {
   const d = dashboard
@@ -96,12 +108,27 @@ function Overview({ dashboard, advice, farmAnalysis, analysisLoading, language, 
   const hasCrops = !!farm?.crops.length
   const cropSummary = hasCrops ? farm!.crops.join(' · ') : `${farm?.livestock?.length || 0} ${t(language, 'livestockGroups').toLowerCase()}`
   const field = farm?.fields?.[0]
+  const livestockCount = farm?.livestock?.reduce((sum, group) => sum + group.count, 0) || 0
+  const satelliteLabel = d?.satellite.source === 'isro-bhuvan-wms' ? 'ISRO LULC map'
+    : d?.satellite.source === 'isro-bhuvan-lulc-250k' ? 'ISRO land cover (250K)'
+      : d?.satellite.ndvi != null ? 'NDVI' : 'Satellite'
+  const satelliteValue = d?.satellite.source === 'isro-bhuvan-wms' ? 'View map'
+    : d?.satellite.source === 'isro-bhuvan-lulc-250k' ? (d.satellite.land_cover?.[0]?.label || '—')
+      : d?.satellite.ndvi != null ? d.satellite.ndvi.toFixed(2) : '—'
+  const satelliteNote = d?.satellite.source === 'isro-bhuvan-wms' ? 'Historical imagery, not crop health'
+    : d?.satellite.source === 'isro-bhuvan-lulc-250k' ? `${d.satellite.land_cover?.[0]?.share_percent ?? 0}% of mapped area · historical context`
+      : d?.satellite.source === 'mock-satellite' ? 'Demo estimate'
+        : d?.satellite.ndvi != null ? 'NDVI near farm pin' : 'No live satellite data'
   return <><div className="welcome"><div><span className="eyebrow">{t(language, 'farmLocation').toUpperCase()} · {farm?.location.state || 'LOCATION NOT SET'}</span><h1>Good morning, {greetingName} <span>👋</span></h1><p>{new Date().toLocaleDateString(language, { weekday: 'long', day: 'numeric', month: 'long' })} · {t(language, 'farmAdvice')}</p></div><div className="welcome-actions"><button className="secondary-button" disabled={analysisLoading} onClick={onAnalyze}><Sprout size={17}/> {analysisLoading ? 'Analyzing…' : t(language, 'runAnalysis')}</button>{hasCrops && <button className="primary-button" onClick={onDiagnose}><Camera size={17}/> {t(language, 'diagnoseCrop')}</button>}</div></div>
-    <div className="quick-stats"><Stat icon={<MapPin/>} label={t(language, 'farmLocation')} value={farm?.location.village || '—'} note={farm?.location.state || ''} /><Stat icon={<Sprout/>} label={hasCrops ? t(language, 'activeCrops') : t(language, 'livestockGroups')} value={String(hasCrops ? farm?.crops.length || 0 : farm?.livestock?.reduce((sum, group) => sum + group.count, 0) || 0)} note={cropSummary} /><Stat icon={<Gauge/>} label={hasCrops ? 'NDVI' : t(language, 'fieldHealth')} value={hasCrops && d?.satellite.ndvi != null ? d.satellite.ndvi.toFixed(2) : '—'} note={hasCrops ? (d?.satellite.source?.startsWith('copernicus') ? 'Sentinel-2 near farm pin' : 'Demo estimate') : 'Crop field data not set'} tone="green" /></div>
+    <div className="quick-stats">
+      <Stat icon={<MapPin/>} label={t(language, 'farmLocation')} value={farm?.location.village || '—'} note={farm?.location.state || ''} />
+      <Stat icon={<Sprout/>} label={hasCrops ? t(language, 'activeCrops') : t(language, 'livestockGroups')} value={String(hasCrops ? farm?.crops.length || 0 : livestockCount)} note={cropSummary} />
+      <Stat icon={<Gauge/>} label={hasCrops ? satelliteLabel : t(language, 'livestockGroups')} value={hasCrops ? satelliteValue : String(livestockCount)} note={hasCrops ? satelliteNote : 'Animals registered on this farm'} tone="green" />
+    </div>
     <SectionHeader eyebrow="FIELD PULSE" title={t(language, 'currentConditions')} action={<button className="text-button" onClick={onAsk}>{t(language, 'askAI')} <ArrowRight size={15}/></button>} />
     <div className="insights-grid"><Weather d={d} language={language}/>{hasCrops && <Soil d={d} language={language} />}{hasCrops && <Health d={d} language={language} />}</div>
     {farmAnalysis && <div className={`farm-analysis-result ${farmAnalysis.source === 'gemini' ? '' : 'unavailable'}`}><div><Bot size={18}/><strong>Farm analysis</strong><small>{farmAnalysis.source === 'gemini' ? 'Gemini' : 'Gemini unavailable'}</small></div><p>{farmAnalysis.answer}</p></div>}
-    <div className="content-grid"><section><SectionHeader eyebrow="RECOMMENDED FOR YOU" title={t(language, 'todaysActions')} />{advice?.items.slice(0, 2).map((item, i) => <ActionCard key={item.title} item={item} index={i}/>)}</section><section><SectionHeader eyebrow={t(language, 'yourFields').toUpperCase()} title={field?.name || t(language, 'fields')} action={<button className="text-button" onClick={onOnboard}>Manage <ArrowRight size={15}/></button>} /><div className="field-card"><div className="field-map"><div className="map-grid"/><span className="map-pin"><MapPin size={19}/></span><span className="field-tag">{field ? `${field.name} · ${field.area_acres} ac` : 'No field recorded'}</span></div><div className="field-details"><div><strong>{field?.name || t(language, 'livestockGroups')}</strong><span className="healthy"><span className="status-dot"/> {farm?.farm_type || 'crops'}</span></div><small>{field ? `${field.crop}${field.growth_stage ? ` · ${field.growth_stage}` : ''}` : (farm?.livestock || []).map(a => `${a.count} ${a.species}`).join(' · ')}</small><div className="field-meta"><span>Moisture <b>{hasCrops && d?.soil.moisture_percent != null ? `${Math.round(d.soil.moisture_percent)}%` : '—'}</b></span><span>NDVI <b>{hasCrops && d?.satellite.ndvi != null ? d.satellite.ndvi.toFixed(2) : '—'}</b></span></div></div></div></section></div>
+    <div className="content-grid"><section><SectionHeader eyebrow="RECOMMENDED FOR YOU" title={t(language, 'todaysActions')} />{advice?.items.slice(0, 2).map((item, i) => <ActionCard key={item.title} item={item} index={i}/>)}</section><section><SectionHeader eyebrow={t(language, 'yourFields').toUpperCase()} title={field?.name || t(language, 'fields')} action={<button className="text-button" onClick={onOnboard}>Manage <ArrowRight size={15}/></button>} /><div className="field-card"><FarmMap location={farm?.location} label={field ? `${field.name} · ${field.area_acres} ac` : 'No field recorded'} /><div className="field-details"><div><strong>{field?.name || t(language, 'livestockGroups')}</strong><span className="healthy"><span className="status-dot"/> {farm?.farm_type || 'crops'}</span></div><small>{field ? `${field.crop}${field.growth_stage ? ` · ${field.growth_stage}` : ''}` : (farm?.livestock || []).map(a => `${a.count} ${a.species}`).join(' · ')}</small><div className="field-meta"><span>Moisture <b>{hasCrops && d?.soil.moisture_percent != null ? `${Math.round(d.soil.moisture_percent)}%` : '—'}</b></span><span>{d?.satellite.source === 'isro-bhuvan-wms' ? 'ISRO WMS' : d?.satellite.source === 'isro-bhuvan-lulc-250k' ? 'ISRO LULC 250K' : d?.satellite.ndvi != null ? 'NDVI' : 'Satellite'} <b>{d?.satellite.source === 'isro-bhuvan-wms' ? 'Map layer' : d?.satellite.source === 'isro-bhuvan-lulc-250k' ? `${d.satellite.land_cover?.[0]?.share_percent ?? 0}%` : hasCrops && d?.satellite.ndvi != null ? d.satellite.ndvi.toFixed(2) : '—'}</b></span></div></div></div></section></div>
   </>
 }
 function Stat({ icon, label, value, note, tone }: { icon: React.ReactNode; label: string; value: string; note: string; tone?: string }) { return <div className="stat-card"><span className={`stat-icon ${tone || ''}`}>{icon}</span><div><small>{label}</small><strong>{value}</strong><span className="muted">{note}</span></div></div> }
@@ -120,14 +147,73 @@ function Health({ d, language }: { d?: Dashboard; language: string }) {
   const ndvi = d?.satellite.ndvi
   const source = d?.satellite.source || 'unavailable'
   const health = d?.satellite.crop_health
-  const healthLabel = ndvi == null || !health ? 'Unavailable' : `${health[0].toUpperCase()}${health.slice(1)}`
-  return <div className="pulse-card"><div className="card-top"><div><span className="eyebrow">{t(language, 'fieldHealth').toUpperCase()} · {source}</span><h3>{healthLabel}</h3><p><span className="status-dot green"/> {source.startsWith('copernicus') ? 'Satellite NDVI proxy' : 'Demo estimate'}</p></div><Leaf className="card-art green"/></div><div className="meter"><span style={{ width: `${ndvi == null ? 0 : Math.max(0, ndvi) * 100}%` }}/></div><div className="mini-note">{ndvi == null ? 'No satellite measurement available.' : `NDVI ${ndvi.toFixed(2)} near the farm pin; not a parcel-level diagnosis.`}</div></div>
+  const bhuvanWms = source === 'isro-bhuvan-wms'
+  const bhuvanStats = source === 'isro-bhuvan-lulc-250k'
+  const bhuvan = bhuvanWms || bhuvanStats
+  const cover = d?.satellite.land_cover || []
+  const healthLabel = bhuvanWms ? 'Map layer' : bhuvanStats ? 'Land-cover context' : ndvi == null || !health || health === 'unavailable' ? 'Unavailable' : `${health[0].toUpperCase()}${health.slice(1)}`
+  return <div className="pulse-card"><div className="card-top"><div><span className="eyebrow">{bhuvan ? 'ISRO LAND COVER' : t(language, 'fieldHealth').toUpperCase()} · {source}</span><h3>{healthLabel}</h3><p><span className={`status-dot ${source === 'unavailable' ? 'yellow' : 'green'}`}/> {bhuvanWms ? 'Bhuvan WMS · reference imagery' : bhuvanStats ? 'Bhuvan LULC 250K · AOI statistics' : source === 'mock-satellite' ? 'Demo estimate' : 'No live satellite data'}</p></div><Leaf className="card-art green"/></div>{bhuvanWms ? <div className="mini-note">Bhuvan’s historical land-cover layer is available on the field map. It is not live crop health or NDVI.</div> : bhuvanStats && cover.length > 0 ? <div className="lulc-classes">{cover.slice(0, 3).map(item => <div key={item.code}><span>{item.label}</span><strong>{item.share_percent}%</strong></div>)}</div> : <div className="meter"><span style={{ width: `${ndvi == null ? 0 : Math.max(0, ndvi) * 100}%` }}/></div>}{!bhuvanWms && <div className="mini-note">{bhuvanStats ? 'Historical Bhuvan 250K regional land-cover mix around the farm pin. It is not live crop health, NDVI, or a surveyed field boundary.' : source === 'unavailable' ? d?.satellite.availability_message || 'Bhuvan LULC statistics are unavailable. Check the daily API token and farm location.' : ndvi == null ? 'No live satellite field-health data is configured.' : `NDVI ${ndvi.toFixed(2)} near the farm pin; not a parcel-level diagnosis.`}</div>}</div>
 }
 function ActionCard({ item, index }: { item: Advisory['items'][number]; index: number }) { return <div className="action-card"><div className={`action-number n${index}`}>{index === 0 ? <Droplets size={18}/> : <Leaf size={18}/>}</div><div><div className="action-title"><strong>{item.title}</strong><span className={`priority ${item.priority}`}>{item.priority}</span></div><p>{item.action}</p><small>{item.reason}</small></div><ChevronRight className="action-arrow" size={18}/></div> }
+function FarmMap({ location, label }: { location?: Location; label: string }) {
+  const hasCoordinates = !!location && Number.isFinite(location.latitude) && Number.isFinite(location.longitude)
+  const stateCodes: Record<string, string> = {
+    andhrapradesh: 'AP', arunachalpradesh: 'AR', assam: 'AS', bihar: 'BR', chhattisgarh: 'CG',
+    goa: 'GA', gujarat: 'GJ', haryana: 'HR', himachalpradesh: 'HP', jharkhand: 'JH',
+    karnataka: 'KA', kerala: 'KL', madhyapradesh: 'MP', maharashtra: 'MH', manipur: 'MN',
+    meghalaya: 'ML', mizoram: 'MZ', nagaland: 'NL', odisha: 'OR', orissa: 'OR', punjab: 'PB',
+    rajasthan: 'RJ', sikkim: 'SK', tamilnadu: 'TN', telangana: 'TS', tripura: 'TR',
+    uttarpradesh: 'UP', uttarakhand: 'UK', uttaranchal: 'UK', westbengal: 'WB',
+    andamanandnicobarislands: 'AN', chandigarh: 'CH', dadraandnagarhavelianddamananddiu: 'DD',
+    delhi: 'DL', nctofdelhi: 'DL', jammuandkashmir: 'JK', ladakh: 'LA', lakshadweep: 'LD',
+    puducherry: 'PY', pondicherry: 'PY',
+  }
+  const normalizedState = (location?.state || '').toLowerCase().replace(/&/g, 'and').replace(/[^a-z]/g, '')
+  const stateCode = stateCodes[normalizedState] || Object.entries(stateCodes).find(([name]) => normalizedState.endsWith(name))?.[1]
+  const [mapLayer, setMapLayer] = useState<'street' | 'lulc'>('lulc')
+  const [wmsFailed, setWmsFailed] = useState(false)
+  const streetMapUrl = hasCoordinates ? (() => {
+    const latitude = location!.latitude
+    const longitude = location!.longitude
+    const longitudePadding = 0.006 / Math.max(Math.abs(Math.cos(latitude * Math.PI / 180)), 0.15)
+    const params = new URLSearchParams({
+      bbox: `${longitude - longitudePadding},${latitude - 0.006},${longitude + longitudePadding},${latitude + 0.006}`,
+      layer: 'mapnik',
+      marker: `${latitude},${longitude}`,
+    })
+    return `https://www.openstreetmap.org/export/embed.html?${params.toString()}`
+  })() : undefined
+  const wmsUrl = hasCoordinates && stateCode ? (() => {
+    const latitude = location!.latitude
+    const longitude = location!.longitude
+    const latitudePadding = 0.003
+    const longitudePadding = latitudePadding * 3 / Math.max(Math.abs(Math.cos(latitude * Math.PI / 180)), 0.15)
+    const params = new URLSearchParams({
+      SERVICE: 'WMS', VERSION: '1.1.1', REQUEST: 'GetMap',
+      LAYERS: `lulc:${stateCode}_LULC50K_1516`, STYLES: 'lulc:LULC50K_1516_NEW',
+      SRS: 'EPSG:4326',
+      BBOX: `${longitude - longitudePadding},${latitude - latitudePadding},${longitude + longitudePadding},${latitude + latitudePadding}`,
+      WIDTH: '900', HEIGHT: '300', FORMAT: 'image/png', TRANSPARENT: 'FALSE',
+    })
+    return `https://bhuvan-vec2.nrsc.gov.in/bhuvan/wms?${params.toString()}`
+  })() : undefined
+  useEffect(() => { setWmsFailed(false) }, [wmsUrl])
+  const showLulc = mapLayer === 'lulc' && !!wmsUrl && !wmsFailed
+  return <div className={`field-map ${hasCoordinates ? 'has-live-map' : 'map-no-location'}`}>
+    {hasCoordinates && <div className="map-layer-switch" aria-label="Map layer">
+      <button type="button" className={!showLulc ? 'selected' : ''} onClick={() => setMapLayer('street')}>Street</button>
+      <button type="button" className={showLulc ? 'selected' : ''} disabled={!wmsUrl} onClick={() => setMapLayer('lulc')}>ISRO LULC</button>
+    </div>}
+    {showLulc ? <><img className="bhuvan-wms-image" src={wmsUrl} alt={`Bhuvan historical land-cover map near ${label}`} onError={() => setWmsFailed(true)}/><span className="wms-center-pin" aria-hidden="true"><MapPin size={24}/></span><span className="map-attribution">ISRO/NRSC · Historical LULC 50K · 2015–16</span></> : streetMapUrl ? <iframe className="farm-map-frame" title={`Street map showing ${label}`} src={streetMapUrl} loading="lazy" referrerPolicy="no-referrer" /> : <div className="map-empty"><MapPin size={22}/><span>Set the farm location to show its map</span></div>}
+    {mapLayer === 'lulc' && !stateCode && hasCoordinates && <span className="map-hint">Set the farm state to load its ISRO layer</span>}
+    {wmsFailed && mapLayer === 'lulc' && <span className="map-hint">Bhuvan map unavailable; showing street map</span>}
+    <span className="field-tag">{label}</span>
+  </div>
+}
 function Fields({ dashboard, language, onDiagnose, onOnboard }: { dashboard?: Dashboard; language: string; onDiagnose: () => void; onOnboard: () => void }) {
   const profile = dashboard?.profile
   const hasCrops = !!profile?.crops.length
-  return <><div className="welcome"><div><span className="eyebrow">{t(language, 'fields').toUpperCase()}</span><h1>{t(language, 'fields')}</h1><p>{profile?.farm_name || profile?.farm_type}</p></div><button className="primary-button" onClick={onOnboard}><Plus size={17}/> {t(language, 'fieldName')}</button></div><div className="fields-grid"><div className="large-field field-card"><div className="field-map"><div className="map-grid"/><span className="map-pin"><MapPin size={19}/></span><span className="field-tag">{profile?.fields?.[0]?.name || '—'} · {profile?.fields?.[0]?.area_acres || 0} acres</span></div><div className="field-details"><div><strong>{profile?.fields?.[0]?.name || t(language, 'livestockGroups')}</strong><span className="healthy"><span className="status-dot"/> {profile?.farm_type}</span></div><small>{profile?.fields?.map(field => `${field.crop} · ${field.name}`).join(' | ') || 'No crop fields recorded'}</small>{hasCrops && <div className="field-meta"><span>{t(language, 'soilMoisture')} <b>{dashboard?.soil.moisture_percent != null ? `${Math.round(dashboard.soil.moisture_percent)}%` : '—'}</b></span><span>NDVI <b>{dashboard?.satellite.ndvi != null ? dashboard.satellite.ndvi.toFixed(2) : '—'}</b></span></div>}</div></div><div className="field-summary"><h3>{t(language, 'livestockGroups')}</h3>{(profile?.livestock || []).map((group, index) => <p key={`${group.species}-${index}`} className="animal-summary"><strong>{group.count} {group.species}</strong>{group.breed ? ` · ${group.breed}` : ''}{group.purpose ? ` · ${group.purpose}` : ''}</p>)}{!profile?.livestock?.length && <p>No animal groups recorded.</p>}{hasCrops && <button onClick={onDiagnose}><Camera size={18}/> {t(language, 'diagnoseCrop')} <ChevronRight size={16}/></button>}<button onClick={onOnboard}><Plus size={18}/> Manage farm <ChevronRight size={16}/></button></div></div></>
+  return <><div className="welcome"><div><span className="eyebrow">{t(language, 'fields').toUpperCase()}</span><h1>{t(language, 'fields')}</h1><p>{profile?.farm_name || profile?.farm_type}</p></div><button className="primary-button" onClick={onOnboard}><Plus size={17}/> {t(language, 'fieldName')}</button></div><div className="fields-grid"><div className="large-field field-card"><FarmMap location={profile?.location} label={`${profile?.fields?.[0]?.name || 'Main field'} · ${profile?.fields?.[0]?.area_acres || profile?.land_area_acres || 0} acres`} /><div className="field-details"><div><strong>{profile?.fields?.[0]?.name || t(language, 'livestockGroups')}</strong><span className="healthy"><span className="status-dot"/> {profile?.farm_type}</span></div><small>{profile?.fields?.map(field => `${field.crop} · ${field.name}`).join(' | ') || 'No crop fields recorded'}</small>{hasCrops && <div className="field-meta"><span>{t(language, 'soilMoisture')} <b>{dashboard?.soil.moisture_percent != null ? `${Math.round(dashboard.soil.moisture_percent)}%` : '—'}</b></span><span>{dashboard?.satellite.source === 'isro-bhuvan-wms' ? 'ISRO WMS' : dashboard?.satellite.source === 'isro-bhuvan-lulc-250k' ? 'ISRO LULC 250K' : dashboard?.satellite.ndvi != null ? 'NDVI' : 'Satellite'} <b>{dashboard?.satellite.source === 'isro-bhuvan-wms' ? 'Map layer' : dashboard?.satellite.source === 'isro-bhuvan-lulc-250k' ? `${dashboard.satellite.land_cover?.[0]?.share_percent ?? 0}%` : dashboard?.satellite.ndvi != null ? dashboard.satellite.ndvi.toFixed(2) : '—'}</b></span></div>}</div></div><div className="field-summary"><h3>{t(language, 'livestockGroups')}</h3>{(profile?.livestock || []).map((group, index) => <p key={`${group.species}-${index}`} className="animal-summary"><strong>{group.count} {group.species}</strong>{group.breed ? ` · ${group.breed}` : ''}{group.purpose ? ` · ${group.purpose}` : ''}</p>)}{!profile?.livestock?.length && <p>No animal groups recorded.</p>}{hasCrops && <button onClick={onDiagnose}><Camera size={18}/> {t(language, 'diagnoseCrop')} <ChevronRight size={16}/></button>}<button onClick={onOnboard}><Plus size={18}/> Manage farm <ChevronRight size={16}/></button></div></div></>
 }
 function Advice({ advice, language }: { advice?: Advisory; language: string }) { return <><div className="welcome"><div><span className="eyebrow">DECISION SUPPORT</span><h1>{t(language, 'farmAdvice')}</h1><p>{advice?.summary}</p></div><div className="advice-badge"><Bot size={18}/> Powered by AgriAI</div></div><div className="advice-list">{advice?.items.map((item, i) => <ActionCard key={item.title} item={item} index={i}/>)}</div></> }
 function Permissions({ language }: { language: string }) { const [state, setState] = useState({ location: false, camera: false, notifications: false }); const items = [{ key: 'location' as const, icon: MapPin, title: t(language, 'farmLocation'), text: t(language, 'locationAccess') }, { key: 'camera' as const, icon: Camera, title: t(language, 'diagnoseCrop'), text: t(language, 'cameraAccess') }, { key: 'notifications' as const, icon: Bell, title: t(language, 'permissions'), text: t(language, 'notificationAccess') }]; return <><div className="welcome"><div><span className="eyebrow">{t(language, 'permissions').toUpperCase()}</span><h1>{t(language, 'permissionsTitle')}</h1><p>{t(language, 'permissionsHelp')}</p></div><ShieldCheck className="hero-shield"/></div><div className="permission-card">{items.map(item => <div className="permission-row" key={item.key}><span className="permission-icon"><item.icon size={20}/></span><div><strong>{item.title}</strong><p>{item.text}</p></div><button className={`toggle ${state[item.key] ? 'on' : ''}`} onClick={() => setState(s => ({ ...s, [item.key]: !s[item.key] }))} aria-label={`Toggle ${item.title}`}><span/></button></div>)}<div className="privacy-box"><ShieldCheck size={18}/><span><strong>{t(language, 'privacyNotice')}</strong><br/><small>{t(language, 'privacyNotice')}</small></span></div></div></> }
@@ -204,25 +290,73 @@ function DiagnosisModal({ crop, language, onClose }: { crop?: string; language: 
         reader.readAsDataURL(file)
       })
       setResult(await api.diagnose(symptoms.trim(), crop, image_url))
-    } catch {
-      setResult({ diagnosis: 'Could not reach the AgriAI backend. Start the backend container and try again.', confidence: null, severity: 'low', actions: [], source: 'unavailable' })
+    } catch (error) {
+      setResult({ diagnosis: error instanceof Error ? error.message : 'Crop diagnosis failed. Please try again.', confidence: null, severity: 'low', actions: [], source: 'unavailable' })
     } finally { setLoading(false) }
   }
   return <div className="modal-backdrop"><div className="modal diagnosis-modal"><div className="modal-heading"><div><span className="eyebrow">{t(language, 'diagnosisTitle').toUpperCase()}</span><h2>{t(language, 'diagnosisTitle')}</h2><p>{t(language, 'diagnosisHelp')}</p></div><button onClick={onClose} className="close-button"><X size={19}/></button></div>{result ? <div className="diagnosis-result"><div className="result-icon"><Leaf size={27}/></div><div className="result-title"><span className={`priority ${result.source === 'unavailable' ? 'medium' : result.severity}`}>{result.source === 'unavailable' ? 'Unavailable' : `${result.severity} attention`}</span><h3>{result.diagnosis}</h3><p>{result.confidence != null ? `${Math.round(result.confidence * 100)}% confidence · ` : ''}{result.source === 'gemini-vision' ? 'Gemini image analysis' : result.source}</p></div>{result.actions.length > 0 && <><h4>{t(language, 'nextSteps')}</h4><ul>{result.actions.map(a => <li key={a}><Check size={16}/>{a}</li>)}</ul></>}<button className="secondary-button full" onClick={() => setResult(undefined)}>{t(language, 'checkAgain')}</button></div> : <form onSubmit={submit}><label className="upload-box"><Upload size={25}/><strong>{file?.name || t(language, 'uploadPhoto')}</strong><small>PNG or JPG · optional · 4 MB max</small><input type="file" accept="image/png,image/jpeg,image/webp" capture="environment" onChange={e => { const selected = e.target.files?.[0]; if (selected && selected.size > 4 * 1024 * 1024) { e.target.value = ''; setFile(undefined); setFileError('Image must be 4 MB or smaller.'); return } setFileError(''); setFile(selected) }}/></label>{fileError && <p className="auth-error">{fileError}</p>}<label>{t(language, 'describeSymptoms')}<textarea required={!file} value={symptoms} onChange={e => setSymptoms(e.target.value)} placeholder="e.g. Yellow spots on the lower leaves..." rows={3}/></label><div className="form-actions"><button type="button" className="secondary-button" onClick={onClose}>{t(language, 'cancel')}</button><button className="primary-button" type="submit" disabled={loading}><Bot size={16}/>{loading ? 'Analyzing with Gemini…' : 'Analyze with Gemini'}</button></div></form>}</div></div>
 }
 function Assistant({ crop, language, onClose }: { crop?: string; language: string; onClose: () => void }) {
   const [question, setQuestion] = useState('')
-  const [answer, setAnswer] = useState<{ answer: string; source: string }>()
+  const [messages, setMessages] = useState<{ question: string; answer?: string; source?: string }[]>([])
   const [loading, setLoading] = useState(false)
-  const ask = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!question.trim() || loading) return
+  const conversationEnd = useRef<HTMLDivElement>(null)
+  useEffect(() => { conversationEnd.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }) }, [messages, loading])
+  const sendQuestion = async (value: string) => {
+    if (!value.trim() || loading) return
+    const submittedQuestion = value.trim()
+    const messageIndex = messages.length
+    setQuestion('')
+    setMessages(current => [...current, { question: submittedQuestion }])
     setLoading(true)
-    try { setAnswer(await api.ask(question.trim(), crop)) }
-    catch { setAnswer({ answer: 'Could not reach the AgriAI backend. Start the backend container and try again.', source: 'unavailable' }) }
+    try {
+      const result = await api.ask(submittedQuestion, crop)
+      setMessages(current => current.map((message, index) => index === messageIndex ? { ...message, answer: result.answer, source: result.source } : message))
+    }
+    catch {
+      setMessages(current => current.map((message, index) => index === messageIndex ? { ...message, answer: 'Could not reach the AgriAI backend. Start the backend container and try again.', source: 'unavailable' } : message))
+    }
     finally { setLoading(false) }
   }
-  return <div className="assistant-panel"><div className="assistant-head"><div><span className="assistant-avatar"><Bot size={20}/></span><div><strong>{t(language, 'askAI')}</strong><small>{t(language, 'preferredLanguage')}</small></div></div><button onClick={onClose}><X size={19}/></button></div><div className="assistant-body"><div className="bot-message"><span className="assistant-avatar tiny"><Bot size={15}/></span><p>{t(language, 'assistantGreeting')}</p></div>{answer && <div className="user-message">{answer.answer}<small className="answer-source">{answer.source === 'unavailable' ? 'AI unavailable' : `Answered by ${answer.source}`}</small></div>}<div className="suggestions"><button onClick={() => setQuestion('Should I irrigate today?')}>Should I irrigate today?</button><button onClick={() => setQuestion('How can I improve my soil?')}>Improve my soil</button></div></div><form className="assistant-input" onSubmit={ask}><input value={question} onChange={e => setQuestion(e.target.value)} placeholder={loading ? 'Waiting for Gemini…' : t(language, 'questionPlaceholder')} /><button aria-label="Send question" disabled={loading}><ArrowRight size={17}/></button></form></div>
+  const ask = (e: React.FormEvent) => { e.preventDefault(); void sendQuestion(question) }
+  return <div className="assistant-panel"><div className="assistant-head"><div><span className="assistant-avatar"><Bot size={20}/></span><div><strong>{t(language, 'askAI')}</strong><small>{t(language, 'preferredLanguage')}</small></div></div><button onClick={onClose}><X size={19}/></button></div><div className="assistant-body"><div className="bot-message"><span className="assistant-avatar tiny"><Bot size={15}/></span><p>{t(language, 'assistantGreeting')}</p></div>{messages.map((message, index) => <div className="conversation-turn" key={`${index}-${message.question}`}><div className="question-bubble">{message.question}</div>{message.answer ? <div className="answer-row"><span className="assistant-avatar tiny"><Bot size={15}/></span><div className="assistant-reply"><AssistantText text={message.answer}/><small className="answer-source">{message.source === 'unavailable' ? 'AI unavailable' : `Answered by ${message.source}`}</small></div></div> : <div className="answer-row"><span className="assistant-avatar tiny"><Bot size={15}/></span><div className="assistant-reply pending-reply">Thinking…</div></div>}</div>)}{messages.length === 0 && <div className="suggestions"><button type="button" disabled={loading} onClick={() => void sendQuestion('Should I irrigate today?')}>Should I irrigate today?</button><button type="button" disabled={loading} onClick={() => void sendQuestion('How can I improve my soil?')}>Improve my soil</button></div>}<div ref={conversationEnd}/></div><form className="assistant-input" onSubmit={ask}><input value={question} onChange={e => setQuestion(e.target.value)} placeholder={loading ? 'Waiting for Gemini…' : t(language, 'questionPlaceholder')} /><button aria-label="Send question" disabled={loading || !question.trim()}><ArrowRight size={17}/></button></form></div>
+}
+
+function AssistantText({ text }: { text: string }) {
+  const normalized = text.replace(/\r/g, '').replace(/\s+\*\s+(?=[A-Z][^*\n]{1,80}:)/g, '\n- ')
+  const lines = normalized.split('\n')
+  const renderInline = (value: string) => value.split(/(\*\*[^*]+\*\*)/g).map((part, index) =>
+    part.startsWith('**') && part.endsWith('**')
+      ? <strong key={index}>{part.slice(2, -2)}</strong>
+      : part.replace(/\*\*/g, ''),
+  )
+  const blocks: React.ReactNode[] = []
+  let list: { ordered: boolean; items: string[] } | undefined
+  const flushList = () => {
+    if (!list) return
+    const List = list.ordered ? 'ol' : 'ul'
+    blocks.push(<List key={`list-${blocks.length}`}>{list.items.map((item, index) => <li key={index}>{renderInline(item)}</li>)}</List>)
+    list = undefined
+  }
+
+  lines.forEach((rawLine, index) => {
+    const line = rawLine.trim()
+    if (!line) { flushList(); return }
+    const heading = line.match(/^#{1,3}\s+(.+)$/)
+    const ordered = line.match(/^\d+[.)]\s+(.+)$/)
+    const unordered = line.match(/^[-*•]\s+(.+)$/)
+    if (ordered || unordered) {
+      const isOrdered = !!ordered
+      if (!list || list.ordered !== isOrdered) { flushList(); list = { ordered: isOrdered, items: [] } }
+      list.items.push((ordered || unordered)![1])
+      return
+    }
+    flushList()
+    if (heading) blocks.push(<h4 key={`heading-${index}`}>{renderInline(heading[1])}</h4>)
+    else blocks.push(<p key={`paragraph-${index}`}>{renderInline(line.replace(/^\*\*(.+?)\*\*\s*/, '**$1** '))}</p>)
+  })
+  flushList()
+  return <div className="assistant-text">{blocks}</div>
 }
 
 export default App

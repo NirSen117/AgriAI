@@ -28,10 +28,23 @@ multi-user production launch.
 
 The root Dockerfile builds Firebase's browser configuration into the static
 frontend. Supply the seven `VITE_FIREBASE_*` values from the Firebase web app
-configuration as Docker build arguments when building the image. These identify
-the web app and are public; never pass `GEMINI_API_KEY` or `BHUVAN_API_TOKEN` as
-frontend build arguments. After deploying, add the Cloud Run service hostname
-to **Firebase Console → Authentication → Settings → Authorized domains**.
+configuration as Docker build arguments when building the image. For production
+on Cloud Run, set `VITE_FIREBASE_AUTH_DOMAIN` to the exact Cloud Run hostname
+users open (currently `agriai-273532640183.asia-south1.run.app`). Nginx proxies
+`/__/auth/` to this Firebase project's sign-in helper so Android Chrome and
+other browsers that block third-party storage can complete Google redirect
+sign-in. Keep the Firebase `firebaseapp.com` auth domain for local Vite dev
+unless you also configure a same-origin proxy there.
+
+These Firebase values identify the web app and are public; never pass
+`GEMINI_API_KEY` or `BHUVAN_API_TOKEN` as frontend build arguments. Add the
+Cloud Run hostname to **Firebase Console → Authentication → Settings →
+Authorized domains**. Also add
+`https://agriai-273532640183.asia-south1.run.app/__/auth/handler` to the
+authorized redirect URIs of the Google OAuth web client used by Firebase Auth.
+If the app is opened at a different Cloud Run hostname, use that same hostname
+as `VITE_FIREBASE_AUTH_DOMAIN`, proxy target origin, Firebase authorized domain,
+and OAuth redirect URI.
 
 ## Hugging Face Docker Space
 

@@ -6,6 +6,33 @@ Run `cp .env.example .env`, then `docker compose up --build`. Without Docker,
 install the backend requirements and run `uvicorn app.main:app --reload` from
 `backend`, and run `npm install && npm run dev` from `frontend`.
 
+The backend requires Firebase ID tokens for farm data, chat, and crop diagnosis.
+Set `FIREBASE_PROJECT_ID` in `.env` to the same project ID as
+`VITE_FIREBASE_PROJECT_ID`. The backend checks token signatures against
+Firebase's published signing certificates and validates the project, issuer,
+expiry, and UID. This does not need gcloud ADC or a service-account key. Local
+Docker therefore does not mount host gcloud credentials.
+
+## Google Cloud Run
+
+Build the combined frontend/backend image from the repository root and deploy
+that image as a Cloud Run service. Set `MOCK_MODE=false`, the Firebase project
+ID, and required provider settings. Store `GEMINI_API_KEY` and `BHUVAN_API_TOKEN`
+in Secret Manager and map them as Cloud Run secrets. Attach a dedicated runtime
+service account with the minimum roles needed for Vertex AI and secret access;
+do not upload or use a service-account JSON key. Firebase ID-token verification
+uses Firebase's public signing certificates and does not require a private
+service-account key. SQLite is not durable across Cloud Run instances, so
+profiles must move to Firestore or another persistent database before a
+multi-user production launch.
+
+The root Dockerfile builds Firebase's browser configuration into the static
+frontend. Supply the seven `VITE_FIREBASE_*` values from the Firebase web app
+configuration as Docker build arguments when building the image. These identify
+the web app and are public; never pass `GEMINI_API_KEY` or `BHUVAN_API_TOKEN` as
+frontend build arguments. After deploying, add the Cloud Run service hostname
+to **Firebase Console → Authentication → Settings → Authorized domains**.
+
 ## Hugging Face Docker Space
 
 The root `Dockerfile` builds the frontend, starts FastAPI on an internal port,

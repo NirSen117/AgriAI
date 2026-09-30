@@ -31,7 +31,7 @@ const getFarmAlerts = (dashboard?: Dashboard): FarmAlert[] => {
 const dataNotice = (dashboard: Dashboard) => {
   const weather = dashboard.weather.source === 'open-meteo' ? 'Live weather' : dashboard.weather.source === 'mock-weather' ? 'Demo weather (mock mode)' : dashboard.weather.source === 'location-required' ? 'Set your farm location to get local weather' : 'Weather unavailable right now'
   const soil = dashboard.soil.source.includes('open-meteo') ? 'modelled soil moisture' : 'demo soil values'
-  const field = dashboard.satellite.source.startsWith('isro-bhuvan') ? 'ISRO/Bhuvan land-cover context' : dashboard.satellite.source === 'mock-satellite' ? 'demo field-health estimate' : 'satellite field-health unavailable'
+  const field = dashboard.satellite.source.startsWith('isro-bhuvan') ? 'Bhuvan AOI land-cover available (historical layer)' : dashboard.satellite.source === 'mock-satellite' ? 'demo field-health estimate' : 'satellite field-health unavailable'
   return `${weather} · ${soil} · ${field}`
 }
 
@@ -68,7 +68,16 @@ function App() {
   useEffect(() => {
     if (!authUser || !dashboard?.satellite.availability_message?.includes('refresh automatically')) return
     const timer = window.setInterval(() => {
-      void api.dashboard().then(setDashboard).catch(() => undefined)
+      void api.dashboard().then(nextDashboard => {
+        setDashboard(nextDashboard)
+        setNotice(current => {
+          if (!current) return current
+          const parts = current.split(' · ')
+          if (parts.length < 3) return current
+          const analysisStatus = parts.slice(3)
+          return `${dataNotice(nextDashboard)}${analysisStatus.length ? ` · ${analysisStatus.join(' · ')}` : ''}`
+        })
+      }).catch(() => undefined)
     }, 12000)
     return () => window.clearInterval(timer)
   }, [authUser?.uid, dashboard?.satellite.source, dashboard?.satellite.availability_message])

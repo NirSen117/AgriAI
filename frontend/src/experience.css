@@ -181,6 +181,7 @@ html[data-theme="dark"] .voice-control.listening .voice-button { background: #b7
   .language-control select { max-width: 125px; }
 }
 @media (max-width: 650px) {
+  .app-shell { min-height: 100dvh; }
   .sidebar { display: none; }
   .app-shell.mobile-nav-open .sidebar,
   .app-shell.mobile-nav-open .sidebar.collapsed { display: flex; position: fixed; z-index: 6; inset: 0 auto 0 0; width: min(300px, 86vw); height: 100dvh; padding: 21px 15px 18px; box-shadow: 12px 0 40px #08130f55; }
@@ -204,4 +205,50 @@ html[data-theme="dark"] .voice-control.listening .voice-button { background: #b7
   .assistant-panel { right: 10px; bottom: 137px; width: min(390px, calc(100% - 20px)); height: min(490px, calc(100dvh - 220px)); }
   .quick-stats { gap: 8px; }
   .stat-card { box-shadow: none; }
+}
+
+/* Keep the header and fixed controls usable on narrow Android viewports. */
+@media (max-width: 650px) {
+  .topbar {
+    width: 100%;
+    min-width: 0;
+    height: 60px;
+    gap: 7px;
+    padding-left: max(10px, env(safe-area-inset-left));
+    padding-right: max(10px, env(safe-area-inset-right));
+  }
+  .mobile-menu { width: 32px; min-width: 32px; height: 40px; display: grid; place-items: center; }
+  .breadcrumb { display: flex; align-items: center; flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
+  .breadcrumb > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .breadcrumb .dot { flex: none; padding: 0 5px; }
+  .top-actions { flex: 0 0 auto; min-width: 0; gap: 6px; }
+  .language-control select { width: 74px; max-width: 74px; padding: 7px 2px; font-size: 10px; }
+  .theme-toggle { width: 30px; min-width: 30px; height: 32px; }
+  .notification-anchor > .icon-button { width: 28px; height: 34px; display: grid; place-items: center; }
+  .profile-button { flex: none; }
+  .logout-button { width: 31px; min-width: 31px; height: 32px; padding: 0; }
+  .logout-button span { display: none; }
+  .page { padding: 17px 12px calc(82px + env(safe-area-inset-bottom)); }
+  .mobile-nav { padding-bottom: max(6px, env(safe-area-inset-bottom)); }
+  .assistant-launcher { right: 12px; bottom: calc(72px + env(safe-area-inset-bottom)); }
+  .assistant-panel {
+    left: 10px;
+    right: 10px;
+    bottom: calc(72px + env(safe-area-inset-bottom));
+    width: auto;
+    height: min(560px, calc(100dvh - 155px - env(safe-area-inset-bottom)));
+    max-height: calc(100dvh - 135px - env(safe-area-inset-top));
+  }
+  .assistant-input input { min-width: 0; font-size: 16px; }
+  .modal-backdrop { align-items: center; overflow-y: auto; padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)); }
+  .modal { max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+}
+
+@media (max-width: 390px) {
+  .topbar { gap: 4px; }
+  .breadcrumb .muted, .breadcrumb .dot { display: none; }
+  .breadcrumb { margin-left: 2px; }
+  .top-actions { gap: 4px; }
+  .language-control select { width: 68px; max-width: 68px; }
+  .profile-button { display: none; }
 }

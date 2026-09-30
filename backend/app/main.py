@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 import sqlite3
@@ -35,6 +36,10 @@ _ai_requests: dict[str, deque[float]] = defaultdict(deque)
 _firebase_certificates: dict[str, str] = {}
 _firebase_certificates_expires_at = 0.0
 _firebase_certificates_lock = Lock()
+_satellite_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bhuvan-lulc")
+_satellite_lock = Lock()
+_satellite_cache: dict[tuple[float, float], tuple[float, SatelliteObservation]] = {}
+_satellite_in_flight: set[tuple[float, float]] = set()
 
 
 def _get_firebase_signing_certificates() -> dict[str, str]:
@@ -315,6 +320,50 @@ def _satellite_unavailable_message(exc: Exception) -> str:
     return f"Bhuvan API request failed ({type(exc).__name__}). Check backend logs."
 
 
+def _request_satellite_observation(location: Location) -> SatelliteObservation:
+    """Return cached Bhuvan data immediately while refreshing slow calls in the background."""
+    if not satellite or not isinstance(satellite, BhuvanLulcProvider):
+        return SatelliteObservation(source="unavailable", crop_health="unavailable",
+                                    availability_message="Bhuvan API token is not configured in the backend environment.",
+                                    observed_at=datetime.now(timezone.utc))
+
+    key = (round(location.latitude, 5), round(location.longitude, 5))
+    now = monotonic()
+    with _satellite_lock:
+        cached = _satellite_cache.get(key)
+        if cached and now < cached[0]:
+            return cached[1]
+        if key not in _satellite_in_flight:
+            _satellite_in_flight.add(key)
+
+            def fetch() -> None:
+                result: SatelliteObservation | None = None
+                cache_seconds = 120
+                try:
+                    result = satellite.get_observation(location)
+                    cache_seconds = 12 * 60 * 60
+                except Exception as exc:
+                    message = _satellite_unavailable_message(exc)
+                    status_code = exc.code if isinstance(exc, HTTPError) else "n/a"
+                    logger.warning("Bhuvan LULC request failed (exception=%s, http_status=%s, reason=%s)",
+                                   type(exc).__name__, status_code, message)
+                    result = SatelliteObservation(source="unavailable", crop_health="unavailable",
+                                                 availability_message=message,
+                                                 observed_at=datetime.now(timezone.utc))
+                    cache_seconds = 120
+                finally:
+                    with _satellite_lock:
+                        _satellite_in_flight.discard(key)
+                        if result is not None:
+                            _satellite_cache[key] = (monotonic() + cache_seconds, result)
+
+            _satellite_executor.submit(fetch)
+
+    return SatelliteObservation(source="unavailable", crop_health="unavailable",
+                                availability_message="Bhuvan lookup is running in the background. This dashboard will refresh automatically.",
+                                observed_at=datetime.now(timezone.utc))
+
+
 @app.get("/api/dashboard", response_model=DashboardResponse, tags=["farm"])
 def dashboard(user_id: str = Depends(require_firebase_user)) -> DashboardResponse:
     profile = _load_profile(user_id)
@@ -327,21 +376,15 @@ def dashboard(user_id: str = Depends(require_firebase_user)) -> DashboardRespons
         soil_observation = soil.get_soil(location)
     except Exception:
         soil_observation = MockSoilProvider().get_soil(location)
-    try:
-        satellite_observation = satellite.get_observation(location) if satellite and profile else SatelliteObservation(
+    if satellite and profile:
+        satellite_observation = _request_satellite_observation(location)
+    else:
+        satellite_observation = SatelliteObservation(
             source="unavailable", crop_health="unavailable",
             availability_message=("Save your farm coordinates to request Bhuvan AOI statistics." if satellite and not profile
                                  else "Bhuvan API token is not configured in the backend environment."),
             observed_at=datetime.now(timezone.utc)
         )
-    except Exception as exc:
-        message = _satellite_unavailable_message(exc)
-        status_code = exc.code if isinstance(exc, HTTPError) else "n/a"
-        logger.warning("Bhuvan LULC request failed (exception=%s, http_status=%s, reason=%s)",
-                       type(exc).__name__, status_code, message)
-        satellite_observation = SatelliteObservation(source="unavailable", crop_health="unavailable",
-                                                     availability_message=message,
-                                                     observed_at=datetime.now(timezone.utc))
     live_providers = sum(source in {"open-meteo", "open-meteo-modelled", "isro-bhuvan-lulc-250k"}
                          for source in (weather_observation.source, soil_observation.source, satellite_observation.source))
     data_quality = "live" if live_providers == 3 else "mixed" if live_providers else "mock"

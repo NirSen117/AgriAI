@@ -66,6 +66,13 @@ function App() {
     })
   }, [authUser?.uid])
   useEffect(() => {
+    if (!authUser || !dashboard?.satellite.availability_message?.includes('refresh automatically')) return
+    const timer = window.setInterval(() => {
+      void api.dashboard().then(setDashboard).catch(() => undefined)
+    }, 12000)
+    return () => window.clearInterval(timer)
+  }, [authUser?.uid, dashboard?.satellite.source, dashboard?.satellite.availability_message])
+  useEffect(() => {
     document.documentElement.dataset.theme = darkTheme ? 'dark' : 'light'
     localStorage.setItem('agriai-theme', darkTheme ? 'dark' : 'light')
   }, [darkTheme])

@@ -66,7 +66,10 @@ function App() {
     })
   }, [authUser?.uid])
   useEffect(() => {
-    if (!authUser || !dashboard?.satellite.availability_message?.includes('refresh automatically')) return
+    const satelliteMessage = dashboard?.satellite.availability_message || ''
+    const waitingForSatellite = satelliteMessage.includes('refresh automatically')
+    const retryingSatellite = satelliteMessage.includes('retry automatically')
+    if (!authUser || !dashboard?.profile || (!waitingForSatellite && !retryingSatellite)) return
     const timer = window.setInterval(() => {
       void api.dashboard().then(nextDashboard => {
         setDashboard(nextDashboard)
@@ -78,9 +81,10 @@ function App() {
           return `${dataNotice(nextDashboard)}${analysisStatus.length ? ` · ${analysisStatus.join(' · ')}` : ''}`
         })
       }).catch(() => undefined)
-    }, 12000)
+    }, waitingForSatellite ? 12000 : 40000)
     return () => window.clearInterval(timer)
-  }, [authUser?.uid, dashboard?.satellite.source, dashboard?.satellite.availability_message])
+  }, [authUser?.uid, dashboard?.profile?.location.latitude, dashboard?.profile?.location.longitude,
+    dashboard?.satellite.source, dashboard?.satellite.availability_message])
   useEffect(() => {
     document.documentElement.dataset.theme = darkTheme ? 'dark' : 'light'
     localStorage.setItem('agriai-theme', darkTheme ? 'dark' : 'light')

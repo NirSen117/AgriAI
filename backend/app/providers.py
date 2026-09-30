@@ -4,6 +4,7 @@ Real integrations can implement these protocols without changing route code.
 """
 
 from datetime import datetime, timezone
+from http.client import RemoteDisconnected
 from math import cos, radians
 import base64
 import json
@@ -212,8 +213,15 @@ class BhuvanLulcProvider:
         request = Request(f"{self.endpoint}?{params}", method="POST",
                           headers={"Accept": "application/json, text/plain;q=0.9, */*;q=0.8",
                                    "Content-Type": "application/json"})
-        with urlopen(request, timeout=self.timeout_seconds) as response:
-            raw = response.read().decode("utf-8", errors="replace")
+        for attempt in range(3):
+            try:
+                with urlopen(request, timeout=self.timeout_seconds) as response:
+                    raw = response.read().decode("utf-8", errors="replace")
+                break
+            except RemoteDisconnected:
+                if attempt == 2:
+                    raise
+                sleep(1.5 * (attempt + 1))
         try:
             payload = json.loads(raw)
         except ValueError:

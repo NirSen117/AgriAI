@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
+from http.client import RemoteDisconnected
 import json
 import logging
 import sqlite3
@@ -314,9 +315,11 @@ def _satellite_unavailable_message(exc: Exception) -> str:
     if isinstance(exc, ValueError):
         return f"Bhuvan response could not be read: {exc}"
     if isinstance(exc, TimeoutError):
-        return "The Bhuvan LULC request timed out. This public service can be slow; try again shortly."
+        return "The Bhuvan LULC request timed out. The app will retry automatically after a short wait."
+    if isinstance(exc, RemoteDisconnected):
+        return "Bhuvan closed the hosted server connection. The app will retry automatically; the map layer may still be available."
     if isinstance(exc, URLError):
-        return "The backend could not connect to the Bhuvan API. Check its outbound network access and try again."
+        return "The hosted server could not connect to Bhuvan. The app will retry automatically after a short wait."
     return f"Bhuvan API request failed ({type(exc).__name__}). Check backend logs."
 
 
@@ -350,7 +353,7 @@ def _request_satellite_observation(location: Location) -> SatelliteObservation:
                     result = SatelliteObservation(source="unavailable", crop_health="unavailable",
                                                  availability_message=message,
                                                  observed_at=datetime.now(timezone.utc))
-                    cache_seconds = 120
+                    cache_seconds = 30
                 finally:
                     with _satellite_lock:
                         _satellite_in_flight.discard(key)

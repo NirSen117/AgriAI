@@ -363,7 +363,7 @@ def _request_satellite_observation(location: Location) -> SatelliteObservation:
             _satellite_executor.submit(fetch)
 
     return SatelliteObservation(source="unavailable", crop_health="unavailable",
-                                availability_message="Bhuvan lookup is running in the background. This dashboard will refresh automatically.",
+                                availability_message="Bhuvan is loading your land-cover data. Please wait a few seconds; this dashboard will refresh automatically.",
                                 observed_at=datetime.now(timezone.utc))
 
 

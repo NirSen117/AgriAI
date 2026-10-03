@@ -112,13 +112,13 @@ body { background: var(--paper); color: var(--ink); transition: background .2s e
 
 html[data-theme="dark"] {
   color-scheme: dark;
-  --ink: #e5eee8;
-  --muted: #a6b7ae;
-  --paper: #111b18;
-  --card: #1b2924;
-  --line: #32443b;
-  --green: #79c99b;
-  --pale: #263c31;
+  --ink: #e9e3d5;
+  --muted: #b8ae98;
+  --paper: #211f19;
+  --card: #302d24;
+  --line: #514b3c;
+  --green: #c3ae72;
+  --pale: #403b2d;
   background: var(--paper);
   color: var(--ink);
 }
@@ -199,22 +199,36 @@ html[data-theme="dark"] .voice-control.listening .voice-button { background: #b7
 
 /* Keep every part of the assistant readable when the dashboard uses dark mode. */
 html[data-theme="dark"] .assistant-panel { background: #17231e; color: #edf5ef; border-color: #34483d; }
-html[data-theme="dark"] .assistant-body { background: #111b17; color: #edf5ef; }
-html[data-theme="dark"] .bot-message p { background: #263a30; color: #edf5ef; }
+html[data-theme="dark"] .sidebar { background: #29271f; }
+html[data-theme="dark"] .sidebar nav button.active { background: #5d553b; color: #f2ecdd; }
+html[data-theme="dark"] .sidebar nav button:hover { background: #45402f; color: #f2ecdd; }
+html[data-theme="dark"] .sidebar .farm-switcher { background: #302d24; border-color: #5a533e; color: #e9e3d5; }
+html[data-theme="dark"] .sidebar .farm-switcher:hover { background: #393526; }
+html[data-theme="dark"] .sidebar .logo-mark { background: #716642; }
+html[data-theme="dark"] .sidebar .outline-button { color: #d2c59e; border-color: #756c4e; }
+html[data-theme="dark"] .assistant-panel { background: #302d24; border-color: #514b3c; color: #e9e3d5; }
+html[data-theme="dark"] .assistant-body { background: #26241d; color: #e9e3d5; }
+html[data-theme="dark"] .bot-message p { background: #3b372b; color: #eee7d8; }
 html[data-theme="dark"] .user-message,
-html[data-theme="dark"] .question-bubble { background: #315d47; color: #fff; }
-html[data-theme="dark"] .assistant-reply { background: #24392e; color: #edf5ef; }
+html[data-theme="dark"] .question-bubble { background: #62583a; color: #fff6dc; }
+html[data-theme="dark"] .assistant-reply { background: #393629; color: #eee7d8; }
 html[data-theme="dark"] .assistant-reply .assistant-text,
 html[data-theme="dark"] .assistant-reply .assistant-text p,
 html[data-theme="dark"] .assistant-reply .assistant-text li,
 html[data-theme="dark"] .assistant-reply .assistant-text h4,
-html[data-theme="dark"] .assistant-reply .assistant-text strong { color: #edf5ef; }
-html[data-theme="dark"] .assistant-reply .answer-source { color: #b7cabe; }
-html[data-theme="dark"] .suggestions button { background: #263a30; color: #e5f0e8; border-color: #557260; }
-html[data-theme="dark"] .assistant-input { background: #17231e; border-color: #34483d; }
-html[data-theme="dark"] .assistant-input input { background: #101a16; color: #f1f7f2; border-color: #465c4e; }
-html[data-theme="dark"] .assistant-input input::placeholder { color: #a4b6aa; opacity: 1; }
-html[data-theme="dark"] .chat-attach-button { background: #263a30; color: #dcebe0; border-color: #557260; }
+html[data-theme="dark"] .assistant-reply .assistant-text strong { color: #eee7d8; }
+html[data-theme="dark"] .assistant-reply .answer-source { color: #c4b99f; }
+html[data-theme="dark"] .suggestions button { background: #3b372b; color: #eee7d8; border-color: #706747; }
+html[data-theme="dark"] .assistant-input { background: #302d24; border-color: #514b3c; }
+html[data-theme="dark"] .assistant-input input { background: #26241d; color: #eee7d8; border-color: #645b40; }
+html[data-theme="dark"] .assistant-input input::placeholder { color: #b8ae98; opacity: 1; }
+html[data-theme="dark"] .chat-attach-button { background: #3b372b; color: #e9e3d5; border-color: #706747; }
+html[data-theme="dark"] .mobile-nav { background: #29271f; border-color: #514b3c; }
+html[data-theme="dark"] .mobile-nav button.active { color: #d1bb78; }
+html[data-theme="dark"] .assistant-head { background: #49432f; }
+
+.farm-switcher { width: 100%; text-align: left; font: inherit; cursor: pointer; }
+.farm-switcher:focus-visible { outline: 3px solid #86cda0; outline-offset: 3px; }
 .chat-file-input { display: none !important; }
 .assistant-input { flex-wrap: wrap; }
 .chat-attach-button { width: 34px; height: 37px; display: grid; place-items: center; flex: none; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: #357b56; }

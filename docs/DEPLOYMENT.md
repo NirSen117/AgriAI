@@ -27,10 +27,10 @@ profiles must move to Firestore or another persistent database before a
 multi-user production launch.
 
 The root Dockerfile builds Firebase's browser configuration into the static
-frontend. Supply the seven `VITE_FIREBASE_*` values from the Firebase web app
-configuration as Docker build arguments when building the image. For production
-on Cloud Run, set `VITE_FIREBASE_AUTH_DOMAIN` to the exact Cloud Run hostname
-users open (currently `agriai-273532640183.asia-south1.run.app`). Nginx proxies
+frontend. Supply the Firebase web app configuration as Docker build arguments
+when building the image. `frontend/.env.local` is for local development; the
+production Cloud Build sets `VITE_FIREBASE_AUTH_DOMAIN` to the exact Cloud Run
+hostname users open (`agriai-273532640183.asia-south1.run.app`). Nginx proxies
 `/__/auth/` to this Firebase project's sign-in helper so Android Chrome and
 other browsers that block third-party storage can complete Google redirect
 sign-in. Keep the Firebase `firebaseapp.com` auth domain for local Vite dev

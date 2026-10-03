@@ -181,7 +181,7 @@ function App() {
   </div>
 }
 
-function Logo() { return <div className="logo"><span className="logo-mark"><Sprout size={20}/></span><span>Agro <strong>AI</strong></span></div> }
+function Logo() { return <div className="logo"><span className="logo-mark"><Sprout size={20}/></span><span className="brand-copy"><span className="brand-name">Agro <strong>AI</strong></span><small className="brand-note">Previously known as AgriAI</small></span></div> }
 function DataNetwork({ userId }: { userId: string }) {
   const [network, setNetwork] = useState<Interoperability>()
   useEffect(() => {

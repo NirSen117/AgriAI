@@ -6,6 +6,8 @@ app_port: 7860
 
 # Agro AI
 
+> Previously known as AgriAI.
+
 Agro AI is a mobile-first, provider-agnostic agricultural decision-support
 prototype for small and marginal farmers in India. It turns farm context,
 weather, soil, field-health observations, and crop images into explainable

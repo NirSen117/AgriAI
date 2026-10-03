@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowRight, Bell, Bot, Camera, Check, ChevronLeft, ChevronRight, CloudSun, Droplets, Gauge, Home, Leaf, LogOut, MapPin, Menu, Mic, MicOff, Moon, Plus, ShieldCheck, Sprout, Sun, Thermometer, Upload, UserRound, Wind, X } from 'lucide-react'
+import { ArrowRight, Bell, Bot, Camera, Check, ChevronLeft, ChevronRight, CloudSun, Database, Droplets, Gauge, Home, Leaf, LogOut, MapPin, Menu, Mic, MicOff, Moon, Plus, ShieldCheck, Sprout, Sun, Thermometer, Upload, UserRound, Wind, X } from 'lucide-react'
 import { api, Advisory, Dashboard, Diagnosis, Interoperability, Location, Profile } from './api'
 import { AuthModal } from './AuthModal'
 import { AuthUser, firebaseAuth } from './firebaseAuth'
@@ -16,7 +16,7 @@ type SpeechRecognitionLike = {
 }
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike
 const speechLocales: Record<string, string> = { en: 'en-IN', hi: 'hi-IN', kn: 'kn-IN', ta: 'ta-IN', te: 'te-IN', bn: 'bn-IN', mr: 'mr-IN' }
-const nav = [{ id: 'overview' as Page, key: 'overview' as const, icon: Home }, { id: 'fields' as Page, key: 'fields' as const, icon: Sprout }, { id: 'advice' as Page, key: 'advice' as const, icon: Leaf }, { id: 'network' as Page, label: 'Data network', icon: Gauge }, { id: 'permissions' as Page, key: 'permissions' as const, icon: ShieldCheck }]
+const nav = [{ id: 'overview' as Page, key: 'overview' as const, icon: Home }, { id: 'fields' as Page, key: 'fields' as const, icon: Sprout }, { id: 'advice' as Page, key: 'advice' as const, icon: Leaf }, { id: 'network' as Page, label: 'Data network', icon: Database }, { id: 'permissions' as Page, key: 'permissions' as const, icon: ShieldCheck }]
 type FarmAlert = { id: string; title: string; detail: string; severity: 'high' | 'medium' }
 const getFarmAlerts = (dashboard?: Dashboard): FarmAlert[] => {
   if (!dashboard) return []
@@ -50,7 +50,7 @@ function App() {
   const [showAuth, setShowAuth] = useState(false)
   const [notice, setNotice] = useState('')
   const [uiLanguage, setUiLanguage] = useState(() => localStorage.getItem('agriai-ui-language') || '')
-  const [darkTheme, setDarkTheme] = useState(() => localStorage.getItem('agriai-theme') === 'dark')
+  const [darkTheme, setDarkTheme] = useState(() => localStorage.getItem('agriai-theme') !== 'light')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('agriai-sidebar-collapsed') === 'true')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
@@ -181,7 +181,7 @@ function App() {
   </div>
 }
 
-function Logo() { return <div className="logo"><span className="logo-mark"><Sprout size={20}/></span><span className="brand-copy"><span className="brand-name">Agro <strong>AI</strong></span><small className="brand-note">Previously known as AgriAI</small></span></div> }
+function Logo() { return <div className="logo"><span className="logo-mark"><Sprout size={23} strokeWidth={2.7}/></span><span className="brand-copy"><span className="brand-name">Agro <strong>AI</strong></span><small className="brand-note">Previously known as AgriAI</small></span></div> }
 function DataNetwork({ userId }: { userId: string }) {
   const [network, setNetwork] = useState<Interoperability>()
   const [loading, setLoading] = useState(true)

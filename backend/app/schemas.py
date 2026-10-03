@@ -136,21 +136,30 @@ class AdvisoryResponse(BaseModel):
 
 class DiagnosisRequest(BaseModel):
     image_url: str | None = Field(default=None, max_length=6 * 1024 * 1024)
+    document_url: str | None = Field(default=None, max_length=6 * 1024 * 1024)
+    language: Literal["en", "hi", "kn", "ta", "te", "bn", "mr"] | None = None
     crop: str | None = None
     symptoms: str | None = None
 
     @model_validator(mode="after")
     def validate_image_data(self):
-        if self.image_url:
-            match = re.fullmatch(r"data:image/(?:png|jpeg|webp);base64,([A-Za-z0-9+/]*={0,2})", self.image_url)
+        if self.image_url and self.document_url:
+            raise ValueError("Upload one image or one PDF document at a time.")
+        for value, pattern, kind in (
+            (self.image_url, r"data:image/(?:png|jpeg|webp);base64,([A-Za-z0-9+/]*={0,2})", "Image"),
+            (self.document_url, r"data:application/pdf;base64,([A-Za-z0-9+/]*={0,2})", "PDF document"),
+        ):
+            if not value:
+                continue
+            match = re.fullmatch(pattern, value)
             if not match:
-                raise ValueError("Image must be a base64 PNG, JPEG, or WebP data URL.")
+                raise ValueError(f"{kind} must be a valid base64 data URL.")
             try:
                 raw = base64.b64decode(match.group(1), validate=True)
             except ValueError as exc:
-                raise ValueError("Image data is invalid.") from exc
+                raise ValueError(f"{kind} data is invalid.") from exc
             if len(raw) > 4 * 1024 * 1024:
-                raise ValueError("Image must be 4 MB or smaller.")
+                raise ValueError(f"{kind} must be 4 MB or smaller.")
         if self.symptoms and len(self.symptoms) > 2000:
             raise ValueError("Symptoms text is too long.")
         return self
@@ -167,6 +176,7 @@ class DiagnosisResponse(BaseModel):
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     crop: str | None = None
+    language: Literal["en", "hi", "kn", "ta", "te", "bn", "mr"] | None = None
 
 
 class AskResponse(BaseModel):

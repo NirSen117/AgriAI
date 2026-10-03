@@ -1,0 +1,23 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId}/diagnosisHistory/{entryId} {
+      allow read, delete: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null
+                    && request.auth.uid == userId
+                    && request.resource.data.keys().hasOnly([
+                      'crop', 'symptoms', 'diagnosis', 'confidence',
+                      'severity', 'actions', 'source', 'createdAt'
+                    ])
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.crop is string
+                    && request.resource.data.symptoms is string
+                    && request.resource.data.diagnosis is string
+                    && request.resource.data.severity in ['low', 'medium', 'high']
+                    && request.resource.data.actions is list
+                    && request.resource.data.actions.size() <= 8
+                    && request.resource.data.source is string;
+      allow update: if false;
+    }
+  }
+}

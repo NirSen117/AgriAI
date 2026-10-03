@@ -3,6 +3,7 @@ import { ArrowRight, Bell, Bot, Camera, Check, ChevronLeft, ChevronRight, CloudS
 import { api, Advisory, Dashboard, Diagnosis, Interoperability, Location, Profile } from './api'
 import { AuthModal } from './AuthModal'
 import { AuthUser, firebaseAuth } from './firebaseAuth'
+import { DiagnosisHistoryEntry, loadDiagnosisHistory, saveDiagnosisHistory } from './diagnosisHistory'
 import { languages, t } from './i18n'
 
 type Page = 'overview' | 'fields' | 'advice' | 'network' | 'permissions'
@@ -98,16 +99,15 @@ function App() {
     }
     if (savedProfile.preferred_language !== uiLanguage) {
       const updated = { ...savedProfile, preferred_language: uiLanguage }
-      void api.onboarding(updated).then(() => setDashboard(current => current ? { ...current, profile: updated } : current))
+      void api.onboarding(updated).then(async () => {
+        setDashboard(current => current ? { ...current, profile: updated } : current)
+        setAdvice(await api.advisory())
+      })
     }
   }, [dashboard?.profile?.preferred_language, uiLanguage])
   const changeLanguage = (next: string) => {
     setUiLanguage(next)
     localStorage.setItem('agriai-ui-language', next)
-    if (profile) {
-      const updated = { ...profile, preferred_language: next }
-      void api.onboarding(updated).then(() => setDashboard(current => current ? { ...current, profile: updated } : current))
-    }
   }
   const alerts = getFarmAlerts(dashboard)
   const currentNavItem = nav.find(item => item.id === page)
@@ -131,7 +131,7 @@ function App() {
       const [nextDashboard, nextAdvice] = await Promise.all([api.dashboard(), api.advisory()])
       setDashboard(nextDashboard); setAdvice(nextAdvice)
       if (includeGemini && nextDashboard.profile) {
-        const result = await api.ask('Analyze my farm using the current data. Clearly distinguish live measurements from estimates, state what data is missing, and give three short prioritized actions for my crop and farm. Do not invent measurements.', nextDashboard.profile.crops[0])
+        const result = await api.ask('Analyze my farm using the current data. Clearly distinguish live measurements from estimates, state what data is missing, and give three short prioritized actions for my crop and farm. Do not invent measurements.', nextDashboard.profile.crops[0], uiLanguage || nextDashboard.profile.preferred_language || 'en')
         setFarmAnalysis(result)
         const analysisLabel = result.source === 'gemini' || result.source === 'gemini-fallback' || result.source === 'vertex-ai'
           ? 'Live AI farm analysis ready'
@@ -370,25 +370,62 @@ function DiagnosisModal({ crop, language, onClose }: { crop?: string; language: 
   const [file, setFile] = useState<File>()
   const [symptoms, setSymptoms] = useState('')
   const [result, setResult] = useState<Diagnosis>()
+  const [history, setHistory] = useState<DiagnosisHistoryEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [fileError, setFileError] = useState('')
+  const [historyUnavailable, setHistoryUnavailable] = useState(false)
+  const [historySaving, setHistorySaving] = useState(false)
+  const cameraInput = useRef<HTMLInputElement>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    void loadDiagnosisHistory().then(setHistory).catch(() => setHistoryUnavailable(true))
+  }, [])
+  const chooseFile = (selected?: File) => {
+    if (!selected) return
+    const isImage = ['image/png', 'image/jpeg', 'image/webp'].includes(selected.type)
+    const isPdf = selected.type === 'application/pdf' || selected.name.toLowerCase().endsWith('.pdf')
+    if (!isImage && !isPdf) { setFileError('Choose a PNG, JPG, WebP photo, or PDF.'); return }
+    if (selected.size > 4 * 1024 * 1024) { setFileError('The photo or PDF must be 4 MB or smaller.'); return }
+    setFileError(''); setFile(selected); setResult(undefined)
+  }
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true); setFileError('')
     try {
-      let image_url: string | undefined
-      if (file) image_url = await new Promise<string>((resolve, reject) => {
+      let attachment: string | undefined
+      if (file) attachment = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader()
         reader.onload = () => resolve(String(reader.result))
-        reader.onerror = () => reject(new Error('Could not read selected image'))
+        reader.onerror = () => reject(new Error('Could not read the selected file.'))
         reader.readAsDataURL(file)
       })
-      setResult(await api.diagnose(symptoms.trim(), crop, image_url))
+      const isPdf = file?.type === 'application/pdf' || file?.name.toLowerCase().endsWith('.pdf')
+      const diagnosis = await api.diagnose(symptoms.trim(), crop, isPdf ? undefined : attachment, isPdf ? attachment : undefined, language)
+      setResult(diagnosis)
+      if (diagnosis.source !== 'unavailable') {
+        setHistorySaving(true)
+        try {
+          await saveDiagnosisHistory({ crop, symptoms: symptoms.trim(), diagnosis })
+          setHistory(await loadDiagnosisHistory())
+          setHistoryUnavailable(false)
+        } catch { setHistoryUnavailable(true) }
+        finally { setHistorySaving(false) }
+      }
     } catch (error) {
       setResult({ diagnosis: error instanceof Error ? error.message : 'Crop diagnosis failed. Please try again.', confidence: null, severity: 'low', actions: [], source: 'unavailable' })
     } finally { setLoading(false) }
   }
-  return <div className="modal-backdrop"><div className="modal diagnosis-modal"><div className="modal-heading"><div><span className="eyebrow">{t(language, 'diagnosisTitle').toUpperCase()}</span><h2>{t(language, 'diagnosisTitle')}</h2><p>{t(language, 'diagnosisHelp')}</p></div><button onClick={onClose} className="close-button"><X size={19}/></button></div>{result ? <div className="diagnosis-result"><div className="result-icon"><Leaf size={27}/></div><div className="result-title"><span className={`priority ${result.source === 'unavailable' ? 'medium' : result.severity}`}>{result.source === 'unavailable' ? 'Unavailable' : `${result.severity} attention`}</span><h3>{result.diagnosis}</h3><p>{result.confidence != null ? `${Math.round(result.confidence * 100)}% confidence · ` : ''}{result.source === 'gemini-vision' ? 'Gemini image analysis' : result.source}</p></div>{result.actions.length > 0 && <><h4>{t(language, 'nextSteps')}</h4><ul>{result.actions.map(a => <li key={a}><Check size={16}/>{a}</li>)}</ul></>}<button className="secondary-button full" onClick={() => setResult(undefined)}>{t(language, 'checkAgain')}</button></div> : <form onSubmit={submit}><label className="upload-box"><Upload size={25}/><strong>{file?.name || t(language, 'uploadPhoto')}</strong><small>PNG or JPG · optional · 4 MB max</small><input type="file" accept="image/png,image/jpeg,image/webp" capture="environment" onChange={e => { const selected = e.target.files?.[0]; if (selected && selected.size > 4 * 1024 * 1024) { e.target.value = ''; setFile(undefined); setFileError('Image must be 4 MB or smaller.'); return } setFileError(''); setFile(selected) }}/></label>{fileError && <p className="auth-error">{fileError}</p>}<label>{t(language, 'describeSymptoms')}<div className="voice-textarea-row"><textarea required={!file} value={symptoms} onChange={e => setSymptoms(e.target.value)} placeholder="e.g. Yellow spots on the lower leaves..." rows={3}/><VoiceInputButton language={language} onTranscript={value => setSymptoms(current => `${current.trim()}${current.trim() ? ' ' : ''}${value}`)}/></div></label><div className="form-actions"><button type="button" className="secondary-button" onClick={onClose}>{t(language, 'cancel')}</button><button className="primary-button" type="submit" disabled={loading}><Bot size={16}/>{loading ? 'Analyzing with Gemini…' : 'Analyze with Gemini'}</button></div></form>}</div></div>
+  return <div className="modal-backdrop"><div className="modal diagnosis-modal">
+    <div className="modal-heading"><div><span className="eyebrow">{t(language, 'diagnosisTitle').toUpperCase()}</span><h2>{t(language, 'diagnosisTitle')}</h2><p>{t(language, 'diagnosisHelp')}</p></div><button onClick={onClose} className="close-button"><X size={19}/></button></div>
+    {result ? <div className="diagnosis-result"><div className="result-icon"><Leaf size={27}/></div><div className="result-title"><span className={`priority ${result.source === 'unavailable' ? 'medium' : result.severity}`}>{result.source === 'unavailable' ? 'Unavailable' : `${result.severity} attention`}</span><h3>{result.diagnosis}</h3><p>{result.confidence != null ? `${Math.round(result.confidence * 100)}% confidence · ` : ''}{result.source === 'gemini-vision' ? 'Gemini image analysis' : result.source}</p>{historySaving && <small>{t(language, 'historySaving')}</small>}</div>{result.actions.length > 0 && <><h4>{t(language, 'nextSteps')}</h4><ul>{result.actions.map(a => <li key={a}><Check size={16}/>{a}</li>)}</ul></>}<button className="secondary-button full" onClick={() => { setResult(undefined); setFile(undefined); setSymptoms('') }}>{t(language, 'checkAgain')}</button></div> : <form onSubmit={submit}>
+      <div className="upload-box"><div className="upload-icon"><Camera size={24}/></div><strong>{file?.name || t(language, 'uploadPhoto')}</strong><small>{t(language, 'attachmentHelp')}</small><div className="upload-actions"><button type="button" className="secondary-button" onClick={() => cameraInput.current?.click()}><Camera size={15}/>{t(language, 'takePhoto')}</button><button type="button" className="secondary-button" onClick={() => fileInput.current?.click()}><Upload size={15}/>{t(language, 'uploadAttachment')}</button></div><input ref={cameraInput} type="file" accept="image/png,image/jpeg,image/webp" capture="environment" onChange={e => chooseFile(e.target.files?.[0])}/><input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp,application/pdf,.pdf" onChange={e => chooseFile(e.target.files?.[0])}/></div>
+      {fileError && <p className="auth-error">{fileError}</p>}
+      <label>{t(language, 'describeSymptoms')}<div className="voice-textarea-row"><textarea required={!file} value={symptoms} onChange={e => setSymptoms(e.target.value)} placeholder="e.g. Yellow spots on the lower leaves..." rows={3}/><VoiceInputButton language={language} onTranscript={value => setSymptoms(current => `${current.trim()}${current.trim() ? ' ' : ''}${value}`)}/></div></label>
+      <div className="form-actions"><button type="button" className="secondary-button" onClick={onClose}>{t(language, 'cancel')}</button><button className="primary-button" type="submit" disabled={loading}><Bot size={16}/>{loading ? t(language, 'diagnosisLoading') : t(language, 'analyzeCrop')}</button></div>
+      {historyUnavailable && <p className="history-notice" role="status">{t(language, 'historyUnavailable')}</p>}
+    </form>}
+    <section className="diagnosis-history"><h3>{t(language, 'historyTitle')}</h3>{history.length ? <div className="diagnosis-history-list">{history.map(entry => <article key={entry.id}><div><strong>{entry.crop || crop || 'Crop'}</strong><span>{entry.createdAt.toLocaleString()}</span></div><p>{entry.diagnosis}</p><small>{Math.round((entry.confidence || 0) * 100)}% · {entry.severity}</small></article>)}</div> : <p>{historyUnavailable ? t(language, 'historyUnavailable') : t(language, 'historyEmpty')}</p>}</section>
+  </div></div>
 }
 function VoiceInputButton({ language, onTranscript }: { language: string; onTranscript: (transcript: string) => void }) {
   const [listening, setListening] = useState(false)
@@ -454,7 +491,7 @@ function Assistant({ crop, language, onClose }: { crop?: string; language: strin
     setMessages(current => [...current, { question: submittedQuestion }])
     setLoading(true)
     try {
-      const result = await api.ask(submittedQuestion, crop)
+      const result = await api.ask(submittedQuestion, crop, language)
       setMessages(current => current.map((message, index) => index === messageIndex ? { ...message, answer: result.answer, source: result.source } : message))
     }
     catch (error) {
@@ -464,7 +501,7 @@ function Assistant({ crop, language, onClose }: { crop?: string; language: strin
     finally { setLoading(false) }
   }
   const ask = (e: React.FormEvent) => { e.preventDefault(); void sendQuestion(question) }
-  return <div className="assistant-panel"><div className="assistant-head"><div><span className="assistant-avatar"><Bot size={20}/></span><div><strong>{t(language, 'askAI')}</strong><small>{t(language, 'preferredLanguage')}</small></div></div><button onClick={onClose}><X size={19}/></button></div><div className="assistant-body"><div className="bot-message"><span className="assistant-avatar tiny"><Bot size={15}/></span><p>{t(language, 'assistantGreeting')}</p></div>{messages.map((message, index) => <div className="conversation-turn" key={`${index}-${message.question}`}><div className="question-bubble">{message.question}</div>{message.answer ? <div className="answer-row"><span className="assistant-avatar tiny"><Bot size={15}/></span><div className="assistant-reply"><AssistantText text={message.answer}/>    <small className="answer-source">{message.source === 'unavailable' ? 'AI unavailable' : message.source === 'mock-fallback' || message.source === 'mock' ? 'Demo fallback advice' : message.source === 'gemini-fallback' ? 'Answered by Gemini API fallback' : `Answered by ${message.source}`}</small></div></div> : <div className="answer-row"><span className="assistant-avatar tiny"><Bot size={15}/></span><div className="assistant-reply pending-reply">Thinking…</div></div>}</div>)}{messages.length === 0 && <div className="suggestions"><button type="button" disabled={loading} onClick={() => void sendQuestion('Should I irrigate today?')}>Should I irrigate today?</button><button type="button" disabled={loading} onClick={() => void sendQuestion('How can I improve my soil?')}>Improve my soil</button></div>}<div ref={conversationEnd}/></div><form className="assistant-input" onSubmit={ask}><input value={question} onChange={e => setQuestion(e.target.value)} placeholder={loading ? 'Waiting for Gemini…' : t(language, 'questionPlaceholder')} /><VoiceInputButton language={language} onTranscript={value => setQuestion(current => `${current.trim()}${current.trim() ? ' ' : ''}${value}`)}/><button aria-label="Send question" disabled={loading || !question.trim()}><ArrowRight size={17}/></button></form></div>
+  return <div className="assistant-panel"><div className="assistant-head"><div><span className="assistant-avatar"><Bot size={20}/></span><div><strong>{t(language, 'askAI')}</strong><small>{t(language, 'preferredLanguage')}</small></div></div><button onClick={onClose}><X size={19}/></button></div><div className="assistant-body"><div className="bot-message"><span className="assistant-avatar tiny"><Bot size={15}/></span><p>{t(language, 'assistantGreeting')}</p></div>{messages.map((message, index) => <div className="conversation-turn" key={`${index}-${message.question}`}><div className="question-bubble">{message.question}</div>{message.answer ? <div className="answer-row"><span className="assistant-avatar tiny"><Bot size={15}/></span><div className="assistant-reply"><AssistantText text={message.answer}/>    <small className="answer-source">{message.source === 'unavailable' ? 'AI unavailable' : message.source === 'mock-fallback' || message.source === 'mock' ? 'Demo fallback advice' : message.source === 'gemini-fallback' ? 'Answered by Gemini API fallback' : `Answered by ${message.source}`}</small></div></div> : <div className="answer-row"><span className="assistant-avatar tiny"><Bot size={15}/></span><div className="assistant-reply pending-reply">{t(language, 'thinking')}</div></div>}</div>)}{messages.length === 0 && <div className="suggestions"><button type="button" disabled={loading} onClick={() => void sendQuestion(t(language, 'irrigationQuestion'))}>{t(language, 'irrigationQuestion')}</button><button type="button" disabled={loading} onClick={() => void sendQuestion(t(language, 'improveSoilQuestion'))}>{t(language, 'improveSoilQuestion')}</button></div>}<div ref={conversationEnd}/></div><form className="assistant-input" onSubmit={ask}><input value={question} onChange={e => setQuestion(e.target.value)} placeholder={loading ? t(language, 'thinking') : t(language, 'questionPlaceholder')} /><VoiceInputButton language={language} onTranscript={value => setQuestion(current => `${current.trim()}${current.trim() ? ' ' : ''}${value}`)}/><button aria-label="Send question" disabled={loading || !question.trim()}><ArrowRight size={17}/></button></form></div>
 }
 
 function AssistantText({ text }: { text: string }) {

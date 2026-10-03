@@ -105,8 +105,8 @@ export const api = {
       return { results, unavailable: results.length === 0 }
     } catch { return { results: [], unavailable: true } }
   },
-  ask: (question: string, crop?: string) => request<{ answer: string; source: string }>('/ai/ask', { method: 'POST', body: JSON.stringify({ question, crop }) }),
-  diagnose: (symptoms: string, crop?: string, image_url?: string) => request<Diagnosis>('/disease/analyze', { method: 'POST', body: JSON.stringify({ symptoms, crop, image_url }) }),
+  ask: (question: string, crop?: string, language?: string) => request<{ answer: string; source: string }>('/ai/ask', { method: 'POST', body: JSON.stringify({ question, crop, language }) }),
+  diagnose: (symptoms: string, crop?: string, image_url?: string, document_url?: string, language?: string) => request<Diagnosis>('/disease/analyze', { method: 'POST', body: JSON.stringify({ symptoms, crop, image_url, document_url, language }) }),
   permissions: () => request<{ location: boolean; camera: boolean; notifications: boolean; explanation: string }>('/permissions', undefined, { location: false, camera: false, notifications: false, explanation: 'Permissions are optional and only requested after your action.' }),
   interoperability: () => request<Interoperability>('/interoperability'),
 }

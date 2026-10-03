@@ -436,13 +436,16 @@ def advisory(user_id: str = Depends(require_firebase_user)) -> AdvisoryResponse:
 def ask(payload: AskRequest, user_id: str = Depends(require_firebase_user)) -> AskResponse:
     profile = _load_profile(user_id)
     selected_crop = payload.crop or (profile.crops[0] if profile and profile.crops else None)
-    language = profile.preferred_language if profile else "en"
+    language = payload.language or (profile.preferred_language if profile else "en")
     if ai is None:
-        fallback = MockAIProvider().answer(payload.question, selected_crop, {"farm": profile.model_dump(mode="json")} if profile else None)
+        context = {"farm": profile.model_dump(mode="json")} if profile else {"farm": {}}
+        context["farm"]["preferred_language"] = language
+        fallback = MockAIProvider().answer(payload.question, selected_crop, context)
         return AskResponse(answer=fallback, source="mock-fallback")
     context: dict = {}
     if profile:
         context["farm"] = profile.model_dump(mode="json")
+        context["farm"]["preferred_language"] = language
         try:
             location = profile.location
             context["weather"] = weather.get_weather(location).model_dump(mode="json")
@@ -478,9 +481,9 @@ def ask(payload: AskRequest, user_id: str = Depends(require_firebase_user)) -> A
 @app.post("/api/disease/analyze", response_model=DiagnosisResponse, tags=["ai"])
 def analyze(payload: DiagnosisRequest, user_id: str = Depends(require_firebase_user)) -> DiagnosisResponse:
     profile = _load_profile(user_id)
-    if not payload.image_url and not payload.symptoms:
-        raise HTTPException(status_code=422, detail="Provide image_url or symptoms to analyze.")
-    language = profile.preferred_language if profile else "en"
+    if not payload.image_url and not payload.document_url and not payload.symptoms:
+        raise HTTPException(status_code=422, detail="Provide an image, PDF report, or symptoms to analyze.")
+    language = payload.language or (profile.preferred_language if profile else "en")
     try:
         return disease.diagnose(payload, language)
     except Exception as exc:

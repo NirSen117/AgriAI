@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    app_name: str = "AgriAI API"
+    app_name: str = "Agro AI API"
     environment: str = "development"
     mock_mode: bool = False
     cors_origins: str = "http://localhost:5173,http://localhost:3000"

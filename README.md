@@ -1,12 +1,12 @@
 ---
-title: AgriAI
+title: Agro AI
 sdk: docker
 app_port: 7860
 ---
 
-# AgriAI
+# Agro AI
 
-AgriAI is a mobile-first, provider-agnostic agricultural decision-support
+Agro AI is a mobile-first, provider-agnostic agricultural decision-support
 prototype for small and marginal farmers in India. It turns farm context,
 weather, soil, field-health observations, and crop images into explainable
 actions while keeping external integrations replaceable.

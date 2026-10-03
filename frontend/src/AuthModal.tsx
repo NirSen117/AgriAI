@@ -59,7 +59,7 @@ export function AuthModal({ onClose, onAuthenticated }: { onClose: () => void; o
       <div className="auth-divider"><span>or</span></div>
       <button className="secondary-button email-option" onClick={() => { setShowEmailForm(true); setError('') }}>Continue with email <ArrowRight size={16}/></button>
       {error && <p className="auth-error" role="alert">{error}</p>}
-      <button className="auth-switch" onClick={() => { setMode('sign-up'); setShowEmailForm(true); setError('') }}>New to AgriAI? Create an account</button>
+      <button className="auth-switch" onClick={() => { setMode('sign-up'); setShowEmailForm(true); setError('') }}>New to Agro AI? Create an account</button>
     </div> : <>
       <form onSubmit={submit} className="auth-form">
         <label>Your name<input type="text" value={farmerName} onChange={event => setFarmerName(event.target.value)} autoComplete="name" minLength={2} maxLength={80} required /></label>
@@ -68,7 +68,7 @@ export function AuthModal({ onClose, onAuthenticated }: { onClose: () => void; o
         {error && <p className="auth-error" role="alert">{error}</p>}
         <button className="primary-button" disabled={submitting}>{submitting ? 'Please wait…' : mode === 'sign-in' ? 'Sign in with email' : 'Create account'} <ArrowRight size={16}/></button>
       </form>
-      <button className="auth-switch" onClick={() => { setMode(mode === 'sign-in' ? 'sign-up' : 'sign-in'); setShowEmailForm(true); setError('') }}>{mode === 'sign-in' ? 'New to AgriAI? Create an account' : 'Already have an account? Sign in'}</button>
+      <button className="auth-switch" onClick={() => { setMode(mode === 'sign-in' ? 'sign-up' : 'sign-in'); setShowEmailForm(true); setError('') }}>{mode === 'sign-in' ? 'New to Agro AI? Create an account' : 'Already have an account? Sign in'}</button>
       {mode === 'sign-in' && <button className="auth-back" onClick={() => { setShowEmailForm(false); setError('') }}><ArrowLeft size={14}/> All sign-in options</button>}
     </>}
   </div></div>

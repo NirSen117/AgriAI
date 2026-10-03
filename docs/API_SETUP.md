@@ -62,7 +62,7 @@ To use Vertex AI first, set `VERTEX_AI_PROJECT` and provide Google Application
 Default Credentials in the deployment environment. Vertex AI is selected first
 when configured. If both Vertex AI and `GEMINI_API_KEY` are present, the Gemini
 API is tried automatically when Vertex initialization or a request fails. If
-both live providers fail, AgriAI returns a deterministic mock response labeled
+both live providers fail, Agro AI returns a deterministic mock response labeled
 `mock-fallback`; the dashboard remains usable.
 
 ## Security status and limits

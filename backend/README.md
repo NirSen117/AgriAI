@@ -1,4 +1,4 @@
-# AgriAI backend
+# Agro AI backend
 
 ## Run locally
 

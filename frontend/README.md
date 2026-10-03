@@ -1,6 +1,6 @@
-# AgriAI frontend
+# Agro AI frontend
 
-The AgriAI frontend is a mobile-first Vite + React + TypeScript dashboard for farm, weather, soil, field-health and crop-diagnosis workflows.
+The Agro AI frontend is a mobile-first Vite + React + TypeScript dashboard for farm, weather, soil, field-health and crop-diagnosis workflows.
 
 ## Run locally
 

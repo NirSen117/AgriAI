@@ -58,13 +58,13 @@ async function request<T>(path: string, options?: RequestInit, fallback?: T): Pr
   } catch (error) {
     if (fallback !== undefined) return fallback
     if (error instanceof DOMException && error.name === 'AbortError') throw error
-    throw new Error('Could not connect to the AgriAI backend. Check that Docker is running and try again.')
+    throw new Error('Could not connect to the Agro AI backend. Check that Docker is running and try again.')
   }
   if (!response.ok) {
     if (fallback !== undefined) return fallback
     const body = await response.json().catch(() => undefined) as { detail?: unknown } | undefined
     const detail = typeof body?.detail === 'string' ? body.detail : undefined
-    throw new Error(detail || `AgriAI request failed (HTTP ${response.status}). Check the backend and proxy logs.`)
+    throw new Error(detail || `Agro AI request failed (HTTP ${response.status}). Check the backend and proxy logs.`)
   }
   return await response.json() as T
 }

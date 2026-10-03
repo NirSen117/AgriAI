@@ -1,2 +1,2 @@
-"""AgriAI backend application."""
+"""Agro AI backend application."""
 

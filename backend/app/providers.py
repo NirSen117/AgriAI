@@ -308,7 +308,7 @@ class GeminiAIProvider:
             "te": "Telugu", "bn": "Bengali", "mr": "Marathi",
         }.get(language_code, "English")
         system_instruction = (
-            "You are AgriAI, a careful agricultural assistant for smallholder farmers in India. "
+            "You are Agro AI, a careful agricultural assistant for smallholder farmers in India. "
             f"Use the supplied farm context when relevant. Write the complete final answer in {language}; "
             "do not switch languages even if the question or context uses another language. "
             "Treat measurements in context as the only available measurements: never invent weather, soil, "
@@ -450,7 +450,7 @@ class VertexAIProvider:
             "te": "Telugu", "bn": "Bengali", "mr": "Marathi",
         }.get(language_code, "English")
         prompt = (
-            "You are AgriAI, a careful agricultural assistant for smallholder farmers in India. "
+            "You are Agro AI, a careful agricultural assistant for smallholder farmers in India. "
             f"Write the complete final answer in {language}, even if the question or context uses another language. "
             "Use only the supplied context; do not invent measurements. State uncertainty and give "
             "concise, practical, low-risk steps. Recommend a local agronomist for pesticide dosage "

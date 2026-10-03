@@ -197,6 +197,41 @@ html[data-theme="dark"] .place-option:hover { background: #263c31; }
 html[data-theme="dark"] .voice-button { background: #17231e; color: #a4deb7; border-color: var(--line); }
 html[data-theme="dark"] .voice-control.listening .voice-button { background: #b7483c; color: #fff; border-color: #b7483c; }
 
+/* Keep every part of the assistant readable when the dashboard uses dark mode. */
+html[data-theme="dark"] .assistant-panel { background: #17231e; color: #edf5ef; border-color: #34483d; }
+html[data-theme="dark"] .assistant-body { background: #111b17; color: #edf5ef; }
+html[data-theme="dark"] .bot-message p { background: #263a30; color: #edf5ef; }
+html[data-theme="dark"] .user-message,
+html[data-theme="dark"] .question-bubble { background: #315d47; color: #fff; }
+html[data-theme="dark"] .assistant-reply { background: #24392e; color: #edf5ef; }
+html[data-theme="dark"] .assistant-reply .assistant-text,
+html[data-theme="dark"] .assistant-reply .assistant-text p,
+html[data-theme="dark"] .assistant-reply .assistant-text li,
+html[data-theme="dark"] .assistant-reply .assistant-text h4,
+html[data-theme="dark"] .assistant-reply .assistant-text strong { color: #edf5ef; }
+html[data-theme="dark"] .assistant-reply .answer-source { color: #b7cabe; }
+html[data-theme="dark"] .suggestions button { background: #263a30; color: #e5f0e8; border-color: #557260; }
+html[data-theme="dark"] .assistant-input { background: #17231e; border-color: #34483d; }
+html[data-theme="dark"] .assistant-input input { background: #101a16; color: #f1f7f2; border-color: #465c4e; }
+html[data-theme="dark"] .assistant-input input::placeholder { color: #a4b6aa; opacity: 1; }
+html[data-theme="dark"] .chat-attach-button { background: #263a30; color: #dcebe0; border-color: #557260; }
+.chat-file-input { display: none !important; }
+.assistant-input { flex-wrap: wrap; }
+.chat-attach-button { width: 34px; height: 37px; display: grid; place-items: center; flex: none; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: #357b56; }
+.chat-attach-button:disabled { opacity: .55; cursor: wait; }
+.chat-photo-pending { width: 100%; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 10px; }
+.chat-photo-pending img { width: 42px; height: 42px; border-radius: 7px; object-fit: cover; }
+.chat-photo-pending span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-photo-pending button { color: var(--muted); padding: 6px; }
+.chat-upload-error { padding: 6px 13px 0; color: #b43b32; font-size: 11px; }
+.chat-crop-photo { display: block; width: min(210px, 100%); max-height: 155px; object-fit: cover; border-radius: 8px; margin-bottom: 7px; }
+.diagnosis-chat-result { border-left: 3px solid #69aa78; }
+.diagnosis-chat-result > strong { font-size: 11px; text-transform: capitalize; }
+.diagnosis-chat-result p { margin: 6px 0; font-size: 12px; }
+.diagnosis-chat-result small { display: block; color: var(--muted); font-size: 10px; }
+.diagnosis-chat-result ul { margin: 8px 0 0; padding-left: 17px; font-size: 11px; line-height: 1.45; }
+html[data-theme="dark"] .diagnosis-chat-result small { color: #b7cabe; }
+
 .mobile-nav-backdrop { display: none; }
 @media (max-width: 900px) {
   .sidebar { width: 224px; }

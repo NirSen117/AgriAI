@@ -479,29 +479,68 @@ function VoiceInputButton({ language, onTranscript }: { language: string; onTran
 
 function Assistant({ crop, language, onClose }: { crop?: string; language: string; onClose: () => void }) {
   const [question, setQuestion] = useState('')
-  const [messages, setMessages] = useState<{ question: string; answer?: string; source?: string }[]>([])
+  const [photo, setPhoto] = useState<{ file: File; url: string }>()
+  const [photoError, setPhotoError] = useState('')
+  const [messages, setMessages] = useState<{ question: string; answer?: string; source?: string; diagnosis?: Diagnosis; photoUrl?: string }[]>([])
+  const [diagnosisContext, setDiagnosisContext] = useState<Diagnosis>()
   const [loading, setLoading] = useState(false)
+  const cameraInput = useRef<HTMLInputElement>(null)
+  const uploadInput = useRef<HTMLInputElement>(null)
+  const previewUrls = useRef<string[]>([])
   const conversationEnd = useRef<HTMLDivElement>(null)
+  useEffect(() => () => previewUrls.current.forEach(URL.revokeObjectURL), [])
   useEffect(() => { conversationEnd.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }) }, [messages, loading])
-  const sendQuestion = async (value: string) => {
-    if (!value.trim() || loading) return
+  const choosePhoto = (file?: File) => {
+    setPhotoError('')
+    if (!file) return
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { setPhotoError('Choose a JPG, PNG, or WebP crop photo.'); return }
+    if (file.size > 4 * 1024 * 1024) { setPhotoError('Crop photos must be 4 MB or smaller.'); return }
+    const url = URL.createObjectURL(file)
+    previewUrls.current.push(url)
+    setPhoto({ file, url })
+  }
+  const sendQuestion = async (value: string, image?: { file: File; url: string }) => {
+    if ((!value.trim() && !image) || loading) return
     const submittedQuestion = value.trim()
     const messageIndex = messages.length
     setQuestion('')
-    setMessages(current => [...current, { question: submittedQuestion }])
+    setPhoto(undefined)
+    setPhotoError('')
+    setMessages(current => [...current, { question: submittedQuestion || (image ? 'Please check this crop photo.' : ''), photoUrl: image?.url }])
     setLoading(true)
     try {
-      const result = await api.ask(submittedQuestion, crop, language)
-      setMessages(current => current.map((message, index) => index === messageIndex ? { ...message, answer: result.answer, source: result.source } : message))
-    }
-    catch (error) {
+      if (image) {
+        const imageData = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(String(reader.result))
+          reader.onerror = () => reject(new Error('Could not read the selected crop photo.'))
+          reader.readAsDataURL(image.file)
+        })
+        const result = await api.diagnose(submittedQuestion, crop, imageData, undefined, language)
+        setMessages(current => current.map((message, index) => index === messageIndex ? { ...message, diagnosis: result } : message))
+        setDiagnosisContext(result)
+        if (result.source !== 'unavailable') {
+          try { await saveDiagnosisHistory({ crop, symptoms: submittedQuestion, diagnosis: result }) } catch { /* Chat diagnosis remains available if history storage is offline. */ }
+        }
+        if (submittedQuestion) {
+          const diagnosisNotes = `Recent crop-photo assessment (tentative, not confirmed): crop=${crop || 'unspecified'}; finding=${result.diagnosis.slice(0, 500)}; severity=${result.severity}; confidence=${result.confidence == null ? 'not provided' : `${Math.round(result.confidence * 100)}%`}; suggested actions=${result.actions.slice(0, 5).join('; ').slice(0, 500)}.`
+          const followUp = await api.ask(`${diagnosisNotes}\n\nFarmer's question about this photo: ${submittedQuestion}`.slice(0, 1950), crop, language)
+          setMessages(current => current.map((message, index) => index === messageIndex ? { ...message, answer: followUp.answer, source: followUp.source } : message))
+        }
+      } else {
+        const contextualQuestion = diagnosisContext
+          ? `Recent crop-photo assessment (tentative, not confirmed): crop=${crop || 'unspecified'}; finding=${diagnosisContext.diagnosis.slice(0, 500)}; severity=${diagnosisContext.severity}; confidence=${diagnosisContext.confidence == null ? 'not provided' : `${Math.round(diagnosisContext.confidence * 100)}%`}; suggested actions=${diagnosisContext.actions.slice(0, 5).join('; ').slice(0, 500)}.\n\nFarmer's question: ${submittedQuestion}`.slice(0, 1950)
+          : submittedQuestion
+        const result = await api.ask(contextualQuestion, crop, language)
+        setMessages(current => current.map((message, index) => index === messageIndex ? { ...message, answer: result.answer, source: result.source } : message))
+      }
+    } catch (error) {
       const detail = error instanceof Error ? error.message : 'Agro AI could not answer this request. Please try again.'
       setMessages(current => current.map((message, index) => index === messageIndex ? { ...message, answer: detail, source: 'unavailable' } : message))
-    }
-    finally { setLoading(false) }
+    } finally { setLoading(false) }
   }
-  const ask = (e: React.FormEvent) => { e.preventDefault(); void sendQuestion(question) }
-  return <div className="assistant-panel"><div className="assistant-head"><div><span className="assistant-avatar"><Bot size={20}/></span><div><strong>{t(language, 'askAI')}</strong><small>{t(language, 'preferredLanguage')}</small></div></div><button onClick={onClose}><X size={19}/></button></div><div className="assistant-body"><div className="bot-message"><span className="assistant-avatar tiny"><Bot size={15}/></span><p>{t(language, 'assistantGreeting')}</p></div>{messages.map((message, index) => <div className="conversation-turn" key={`${index}-${message.question}`}><div className="question-bubble">{message.question}</div>{message.answer ? <div className="answer-row"><span className="assistant-avatar tiny"><Bot size={15}/></span><div className="assistant-reply"><AssistantText text={message.answer}/>    <small className="answer-source">{message.source === 'unavailable' ? 'AI unavailable' : message.source === 'mock-fallback' || message.source === 'mock' ? 'Demo fallback advice' : message.source === 'gemini-fallback' ? 'Answered by Gemini API fallback' : `Answered by ${message.source}`}</small></div></div> : <div className="answer-row"><span className="assistant-avatar tiny"><Bot size={15}/></span><div className="assistant-reply pending-reply">{t(language, 'thinking')}</div></div>}</div>)}{messages.length === 0 && <div className="suggestions"><button type="button" disabled={loading} onClick={() => void sendQuestion(t(language, 'irrigationQuestion'))}>{t(language, 'irrigationQuestion')}</button><button type="button" disabled={loading} onClick={() => void sendQuestion(t(language, 'improveSoilQuestion'))}>{t(language, 'improveSoilQuestion')}</button></div>}<div ref={conversationEnd}/></div><form className="assistant-input" onSubmit={ask}><input value={question} onChange={e => setQuestion(e.target.value)} placeholder={loading ? t(language, 'thinking') : t(language, 'questionPlaceholder')} /><VoiceInputButton language={language} onTranscript={value => setQuestion(current => `${current.trim()}${current.trim() ? ' ' : ''}${value}`)}/><button aria-label="Send question" disabled={loading || !question.trim()}><ArrowRight size={17}/></button></form></div>
+  const ask = (e: React.FormEvent) => { e.preventDefault(); void sendQuestion(question, photo) }
+  return <div className="assistant-panel"><div className="assistant-head"><div><span className="assistant-avatar"><Bot size={20}/></span><div><strong>{t(language, 'askAI')}</strong><small>{t(language, 'preferredLanguage')}</small></div></div><button onClick={onClose}><X size={19}/></button></div><div className="assistant-body"><div className="bot-message"><span className="assistant-avatar tiny"><Bot size={15}/></span><p>{t(language, 'assistantGreeting')}</p></div>{messages.map((message, index) => <div className="conversation-turn" key={`${index}-${message.question}`}><div className="question-bubble">{message.photoUrl && <img className="chat-crop-photo" src={message.photoUrl} alt="Crop photo sent for diagnosis"/>}{message.question}</div>{message.diagnosis && <div className="answer-row"><span className="assistant-avatar tiny"><Leaf size={14}/></span><div className="assistant-reply diagnosis-chat-result"><strong>Crop assessment · {message.diagnosis.severity} attention</strong><p>{message.diagnosis.diagnosis}</p>{message.diagnosis.confidence != null && <small>{Math.round(message.diagnosis.confidence * 100)}% confidence · {message.diagnosis.source}</small>}{message.diagnosis.actions.length > 0 && <ul>{message.diagnosis.actions.slice(0, 5).map((action, actionIndex) => <li key={actionIndex}>{action}</li>)}</ul>}</div></div>}{message.answer ? <div className="answer-row"><span className="assistant-avatar tiny"><Bot size={15}/></span><div className="assistant-reply"><AssistantText text={message.answer}/><small className="answer-source">{message.source === 'unavailable' ? 'AI unavailable' : message.source === 'mock-fallback' || message.source === 'mock' ? 'Demo fallback advice' : message.source === 'gemini-fallback' ? 'Answered by Gemini API fallback' : `Answered by ${message.source}`}</small></div></div> : loading && index === messages.length - 1 ? <div className="answer-row"><span className="assistant-avatar tiny"><Bot size={15}/></span><div className="assistant-reply pending-reply">{t(language, 'thinking')}</div></div> : null}</div>)}{messages.length === 0 && <div className="suggestions"><button type="button" disabled={loading} onClick={() => void sendQuestion(t(language, 'irrigationQuestion'))}>{t(language, 'irrigationQuestion')}</button><button type="button" disabled={loading} onClick={() => void sendQuestion(t(language, 'improveSoilQuestion'))}>{t(language, 'improveSoilQuestion')}</button></div>}<div ref={conversationEnd}/></div>{photoError && <div className="chat-upload-error" role="status">{photoError}</div>}<form className="assistant-input" onSubmit={ask}>{photo && <div className="chat-photo-pending"><img src={photo.url} alt="Selected crop"/><span>{photo.file.name}</span><button type="button" aria-label="Remove crop photo" onClick={() => setPhoto(undefined)}><X size={15}/></button></div>}<input value={question} onChange={e => setQuestion(e.target.value)} placeholder={loading ? t(language, 'thinking') : t(language, 'questionPlaceholder')} /><button type="button" className="chat-attach-button" onClick={() => cameraInput.current?.click()} disabled={loading} aria-label={t(language, 'takePhoto')} title={t(language, 'takePhoto')}><Camera size={17}/></button><button type="button" className="chat-attach-button" onClick={() => uploadInput.current?.click()} disabled={loading} aria-label={t(language, 'uploadAttachment')} title={t(language, 'uploadAttachment')}><Upload size={17}/></button><VoiceInputButton language={language} onTranscript={value => setQuestion(current => `${current.trim()}${current.trim() ? ' ' : ''}${value}`)}/><button aria-label="Send question" disabled={loading || (!question.trim() && !photo)}><ArrowRight size={17}/></button><input ref={cameraInput} className="chat-file-input" type="file" accept="image/png,image/jpeg,image/webp" capture="environment" onChange={e => { choosePhoto(e.target.files?.[0]); e.currentTarget.value = '' }}/><input ref={uploadInput} className="chat-file-input" type="file" accept="image/png,image/jpeg,image/webp" onChange={e => { choosePhoto(e.target.files?.[0]); e.currentTarget.value = '' }}/></form></div>
 }
 
 function AssistantText({ text }: { text: string }) {

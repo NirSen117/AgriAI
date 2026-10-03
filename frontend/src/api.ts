@@ -1,11 +1,12 @@
 import { firebaseAuth } from './firebaseAuth'
+import { loadFarmProfile, saveFarmProfile, saveFarmProfileIfMissing } from './farmStore'
 
 export type Location = { latitude: number; longitude: number; village?: string; state?: string }
 export type FarmType = 'crops' | 'livestock' | 'mixed'
 export type LivestockGroup = { species: 'cattle'|'buffalo'|'goat'|'sheep'|'poultry'|'pig'|'other'; count: number; breed?: string; purpose?: string }
 export type FarmField = { name: string; area_acres: number; crop: string; crop_variety?: string; sowing_date?: string; growth_stage?: string; irrigation?: string; soil_type?: string }
 export type Profile = { farmer_name: string; farm_name?: string; location: Location; farm_type?: FarmType; land_area_acres: number; soil_type?: string; irrigation?: string; crops: string[]; fields?: FarmField[]; livestock?: LivestockGroup[]; preferred_language?: string; crop_variety?: string; sowing_date?: string; growth_stage?: string; previous_crop?: string }
-export type Dashboard = { profile: Profile | null; weather: { temperature_c: number; humidity_percent: number; rainfall_mm: number; rainfall_probability: number; wind_kph: number; source: string }; soil: { ph?: number | null; moisture_percent?: number | null; nitrogen_index?: number | null; organic_carbon_percent?: number | null; source: string }; satellite: { ndvi?: number | null; crop_health: 'poor'|'fair'|'good'|'excellent'|'unavailable'; land_cover?: { code: string; label: string; area_sq_km: number; share_percent: number }[]; cloud_cover_percent?: number | null; observed_at?: string; availability_message?: string | null; source: string }; data_quality: string }
+export type Dashboard = { profile: Profile | null; profile_sync?: 'synced' | 'unavailable'; weather: { temperature_c: number; humidity_percent: number; rainfall_mm: number; rainfall_probability: number; wind_kph: number; source: string }; soil: { ph?: number | null; moisture_percent?: number | null; nitrogen_index?: number | null; organic_carbon_percent?: number | null; source: string }; satellite: { ndvi?: number | null; crop_health: 'poor'|'fair'|'good'|'excellent'|'unavailable'; land_cover?: { code: string; label: string; area_sq_km: number; share_percent: number }[]; cloud_cover_percent?: number | null; observed_at?: string; availability_message?: string | null; source: string }; data_quality: string }
 export type Advisory = { summary: string; items: { priority: 'high'|'medium'|'low'; title: string; action: string; reason: string }[]; source: string }
 export type Diagnosis = { diagnosis: string; confidence?: number | null; severity: 'low'|'medium'|'high'; actions: string[]; source: string }
 export type Interoperability = { schema: string; sources: { name: string; state: string; status: string; categories: string[] }[]; normalized_count: number; data_quality: string; last_sync: string }
@@ -71,10 +72,35 @@ export const api = {
   dashboard: async (): Promise<Dashboard> => {
     const uid = firebaseAuth.currentUser()?.uid
     const cached = localProfile(uid)
+    let sharedProfile: Profile | null = null
+    let firestoreAvailable = false
+    if (uid) {
+      try { sharedProfile = await loadFarmProfile(uid); firestoreAvailable = true }
+      catch { /* Preserve local/legacy behavior while Firestore is not yet configured. */ }
+    }
     let dashboard: Dashboard
+    if (sharedProfile) {
+      localStorage.setItem(profileKey(uid!), JSON.stringify(sharedProfile))
+      try { await request('/onboarding', { method: 'POST', body: JSON.stringify(sharedProfile) }) }
+      catch { /* Profile remains safely stored in Firestore; dashboard can still show cached data. */ }
+    }
     try { dashboard = await request<Dashboard>('/dashboard') }
     catch { dashboard = unavailableDashboard(cached) }
-    const farmProfile = dashboard.profile || cached
+    if (uid && firestoreAvailable && !sharedProfile) {
+      const existing = dashboard.profile || cached
+      if (existing) {
+        try {
+          sharedProfile = await saveFarmProfileIfMissing(uid, existing)
+          localStorage.setItem(profileKey(uid), JSON.stringify(sharedProfile))
+          if (JSON.stringify(sharedProfile) !== JSON.stringify(dashboard.profile)) {
+            await request('/onboarding', { method: 'POST', body: JSON.stringify(sharedProfile) })
+            dashboard = await request<Dashboard>('/dashboard')
+          }
+        } catch { firestoreAvailable = false }
+      }
+    }
+    const farmProfile = sharedProfile || dashboard.profile || cached
+    dashboard = { ...dashboard, profile: farmProfile, profile_sync: firestoreAvailable ? 'synced' : 'unavailable' }
     if (dashboard.weather.source === 'mock-weather' || dashboard.weather.source === 'unavailable') {
       if (farmProfile) {
         try { dashboard = { ...dashboard, profile: farmProfile, weather: await liveWeather(farmProfile.location) } }
@@ -89,7 +115,9 @@ export const api = {
     if (!uid) throw new Error('Sign in before saving your farm profile.')
     const result = await request<{ saved: boolean; profile: Profile }>('/onboarding', { method: 'POST', body: JSON.stringify(profile) })
     localStorage.setItem(profileKey(uid), JSON.stringify(profile))
-    return result
+    let synced = false
+    try { await saveFarmProfile(uid, profile); synced = true } catch { /* Tell the UI the save is device/backend-only until Firestore is ready. */ }
+    return { ...result, synced }
   },
   geocode: async (query: string, signal?: AbortSignal) => {
     let backendResults: { name: string; admin1: string; country: string; latitude: number; longitude: number }[] = []

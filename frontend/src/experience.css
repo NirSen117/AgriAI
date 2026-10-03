@@ -232,6 +232,27 @@ html[data-theme="dark"] .chat-attach-button { background: #263a30; color: #dcebe
 .diagnosis-chat-result ul { margin: 8px 0 0; padding-left: 17px; font-size: 11px; line-height: 1.45; }
 html[data-theme="dark"] .diagnosis-chat-result small { color: #b7cabe; }
 
+.network-error { color: #ad4038; font-size: 12px; }
+.network-limitation { margin: 16px 0; padding: 11px 13px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.normalized-records { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 12px; margin-top: 16px; }
+.normalized-record { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 11px; background: var(--card); color: var(--ink); }
+.normalized-record-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.normalized-record-heading strong, .normalized-record-heading small { display: block; }
+.normalized-record-heading strong { font-size: 14px; text-transform: capitalize; }
+.normalized-record-heading small, .record-time, .record-coordinates, .record-limitation { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.quality-badge { flex: none; padding: 4px 7px; border-radius: 999px; background: #e6f3e9; color: #397b52; font-size: 9px; text-transform: capitalize; }
+.quality-historical { background: #edf0e2; color: #69743e; }
+.quality-simulated, .quality-unavailable { background: #fff0df; color: #9a6032; }
+.quality-modelled { background: #e5f1f5; color: #3f7185; }
+.normalized-record details { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); }
+.normalized-record summary { color: var(--green); cursor: pointer; font-size: 11px; }
+.normalized-record pre { max-height: 260px; overflow: auto; margin: 10px 0 0; padding: 10px; border-radius: 7px; background: var(--paper); color: var(--ink); font-size: 9px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+html[data-theme="dark"] .normalized-record { background: var(--card); color: var(--ink); border-color: var(--line); }
+html[data-theme="dark"] .quality-badge { background: #244333; color: #b8e3c5; }
+html[data-theme="dark"] .quality-historical { background: #3c412d; color: #e2e7b6; }
+html[data-theme="dark"] .quality-simulated, html[data-theme="dark"] .quality-unavailable { background: #493728; color: #f0c49c; }
+html[data-theme="dark"] .quality-modelled { background: #203c46; color: #b8dce9; }
+
 .mobile-nav-backdrop { display: none; }
 @media (max-width: 900px) {
   .sidebar { width: 224px; }

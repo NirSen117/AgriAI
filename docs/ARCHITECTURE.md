@@ -10,7 +10,9 @@ mock or cached observation and reports provider status separately. Deterministic
 calculations (rainfall risk, field-health bands, and regenerative rule
 selection) happen before optional AI generation.
 
-The interoperability layer converts state-specific records into a common
-`AgricultureRecord`, validates required fields, and exposes data-quality
-metadata. GeoJSON is used for boundaries so a map provider can be swapped
-later.
+The interoperability layer converts the signed-in farm profile and configured
+provider observations into `AgroAIRecord/v1`, validates output with Pydantic,
+and includes source, unit, timestamp, quality, and limitation metadata. Point
+coordinates use GeoJSON longitude/latitude order. State-government datasets
+are not connected yet; the API and UI state this directly rather than showing
+simulated regional connectors as live integrations.

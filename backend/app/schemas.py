@@ -120,6 +120,44 @@ class DashboardResponse(BaseModel):
     data_quality: Literal["mock", "live", "mixed"]
 
 
+class NormalizedGeoJSONPoint(BaseModel):
+    type: Literal["Point"] = "Point"
+    # GeoJSON/OGC axis order is longitude, latitude.
+    coordinates: tuple[float, float]
+
+
+class InteroperabilityRecord(BaseModel):
+    id: str
+    schema_version: Literal["AgroAIRecord/v1"] = Field(default="AgroAIRecord/v1", alias="schema")
+    record_type: Literal["farm_profile", "crop_field", "livestock_group", "weather_observation", "soil_observation", "satellite_observation"]
+    source: str
+    quality: Literal["user-reported", "live", "modelled", "historical", "simulated", "unavailable"]
+    recorded_at: datetime
+    observed_at: datetime | None = None
+    location: NormalizedGeoJSONPoint | None = None
+    coordinate_reference_system: Literal["OGC:CRS84"] | None = "OGC:CRS84"
+    units: dict[str, str] = Field(default_factory=dict)
+    data: dict[str, Any] = Field(default_factory=dict)
+    limitations: list[str] = Field(default_factory=list)
+
+
+class InteroperabilitySource(BaseModel):
+    name: str
+    status: Literal["connected", "user-reported", "simulated", "unavailable"]
+    categories: list[str]
+    record_count: int = Field(ge=0)
+
+
+class InteroperabilityResponse(BaseModel):
+    schema_version: Literal["AgroAIRecord/v1"] = Field(default="AgroAIRecord/v1", alias="schema")
+    sources: list[InteroperabilitySource]
+    records: list[InteroperabilityRecord]
+    normalized_count: int = Field(ge=0)
+    data_quality: str
+    last_sync: datetime
+    limitation: str
+
+
 class AdvisoryItem(BaseModel):
     priority: Literal["high", "medium", "low"]
     title: str

@@ -18,14 +18,16 @@ from fastapi.responses import JSONResponse
 
 from .advisory import build_advisory, localize_advisory
 from .config import get_settings
+from .interoperability import normalize_interoperability
 from .providers import (
     GeminiAIProvider, GeminiDiseaseProvider, VertexAIProvider,
     BhuvanLulcProvider, MockAIProvider, MockDiseaseProvider, MockSatelliteProvider, MockSoilProvider, MockWeatherProvider,
     OpenMeteoSoilProvider, OpenMeteoWeatherProvider,
 )
 from .schemas import (AdvisoryItem, AdvisoryResponse, AskRequest, AskResponse, DashboardResponse, DiagnosisRequest,
-                      DiagnosisResponse, FarmProfile, HealthResponse, OnboardingResponse, PermissionResponse,
-                      Location, ProviderStatus, SatelliteObservation, SystemStatus)
+                      DiagnosisResponse, FarmProfile, HealthResponse, InteroperabilityResponse,
+                      OnboardingResponse, PermissionResponse, Location, ProviderStatus,
+                      SatelliteObservation, SystemStatus)
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -506,25 +508,8 @@ def demo(user_id: str = Depends(require_firebase_user)) -> DashboardResponse:
     return dashboard(user_id)
 
 
-@app.get("/api/interoperability", tags=["interoperability"])
-def interoperability(user_id: str = Depends(require_firebase_user)) -> dict:
-    states = ["Karnataka", "Maharashtra", "Tamil Nadu"]
-    timestamp = datetime.now(timezone.utc).isoformat()
-    return {
-        "schema": "AgricultureRecord/v1",
-        "sources": [
-            {"name": f"{state} demo adapter", "state": state, "status": "connected",
-             "categories": ["crops", "soil", "weather", "field observations"]}
-            for state in states
-        ],
-        "records": [
-            {"source": f"{state} demo adapter", "state": state, "district": "Demo district",
-             "location": {"type": "Point", "coordinates": [78.9629, 20.5937]},
-             "crop": "Groundnut", "observations": {"soil": "normalized", "weather": "normalized",
-             "field": "normalized"}, "timestamp": timestamp, "quality": "simulated"}
-            for state in states
-        ],
-        "normalized_count": len(states),
-        "data_quality": "simulated demo records",
-        "last_sync": timestamp,
-    }
+
+@app.get("/api/interoperability", response_model=InteroperabilityResponse, tags=["interoperability"])
+def interoperability(user_id: str = Depends(require_firebase_user)) -> InteroperabilityResponse:
+    profile = _load_profile(user_id)
+    return normalize_interoperability(profile, dashboard(user_id))

@@ -9,7 +9,15 @@ export type Profile = { farmer_name: string; farm_name?: string; location: Locat
 export type Dashboard = { profile: Profile | null; profile_sync?: 'synced' | 'unavailable'; weather: { temperature_c: number; humidity_percent: number; rainfall_mm: number; rainfall_probability: number; wind_kph: number; source: string }; soil: { ph?: number | null; moisture_percent?: number | null; nitrogen_index?: number | null; organic_carbon_percent?: number | null; source: string }; satellite: { ndvi?: number | null; crop_health: 'poor'|'fair'|'good'|'excellent'|'unavailable'; land_cover?: { code: string; label: string; area_sq_km: number; share_percent: number }[]; cloud_cover_percent?: number | null; observed_at?: string; availability_message?: string | null; source: string }; data_quality: string }
 export type Advisory = { summary: string; items: { priority: 'high'|'medium'|'low'; title: string; action: string; reason: string }[]; source: string }
 export type Diagnosis = { diagnosis: string; confidence?: number | null; severity: 'low'|'medium'|'high'; actions: string[]; source: string }
-export type Interoperability = { schema: string; sources: { name: string; state: string; status: string; categories: string[] }[]; normalized_count: number; data_quality: string; last_sync: string }
+export type Interoperability = {
+  schema: string
+  sources: { name: string; status: 'connected'|'user-reported'|'simulated'|'unavailable'; categories: string[]; record_count: number }[]
+  records: { id: string; record_type: string; source: string; quality: string; recorded_at: string; observed_at?: string | null; location?: { type: 'Point'; coordinates: [number, number] } | null; coordinate_reference_system?: string | null; units: Record<string, string>; data: Record<string, unknown>; limitations: string[] }[]
+  normalized_count: number
+  data_quality: string
+  last_sync: string
+  limitation: string
+}
 
 const profileKey = (uid: string) => `agriai-farm-profile:${uid}`
 const localProfile = (uid?: string): Profile | null => {

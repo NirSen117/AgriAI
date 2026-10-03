@@ -184,15 +184,27 @@ function App() {
 function Logo() { return <div className="logo"><span className="logo-mark"><Sprout size={20}/></span><span className="brand-copy"><span className="brand-name">Agro <strong>AI</strong></span><small className="brand-note">Previously known as AgriAI</small></span></div> }
 function DataNetwork({ userId }: { userId: string }) {
   const [network, setNetwork] = useState<Interoperability>()
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
   useEffect(() => {
-    api.interoperability().then(setNetwork).catch(() => undefined)
+    let active = true
+    setLoading(true)
+    api.interoperability().then(value => { if (active) { setNetwork(value); setLoadError('') } })
+      .catch(error => { if (active) setLoadError(error instanceof Error ? error.message : 'Could not load normalized farm data.') })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
   }, [userId])
   return <section className="network-page">
     <SectionHeader eyebrow="DIGITAL PUBLIC GOOD" title="Data network" />
-    <p className="muted">State-specific agricultural records are normalized before they reach the shared intelligence layer.</p>
-    <div className="network-flow"><strong>Karnataka</strong><span>→</span><strong>Maharashtra</strong><span>→</span><strong>Tamil Nadu</strong><span>→</span><strong>Common Agriculture Schema</strong><span>→</span><strong>Localized advisory</strong></div>
-    <div className="network-grid">{network?.sources.map(source => <article className="network-card" key={source.state}><span className="status-dot green"/><strong>{source.name}</strong><small>{source.state} · {source.categories.join(' · ')}</small><small>Demo adapter · normalized</small></article>)}</div>
-    <div className="network-summary"><strong>{network?.normalized_count || 0}</strong><span>records normalized into {network?.schema || 'AgricultureRecord/v1'}</span><small>Data quality: {network?.data_quality || 'loading'}</small></div>
+    <p className="muted">Your farm profile and configured data providers are mapped to one versioned record format with standard units, coordinate order, timestamps, and source quality.</p>
+    <div className="network-flow"><strong>Your farm &amp; fields</strong><span>→</span><strong>Canonical units + GeoJSON</strong><span>→</span><strong>AgroAIRecord/v1</strong><span>→</span><strong>Farm advice</strong></div>
+    {loadError && <p className="network-error" role="alert">{loadError}</p>}
+    <div className="network-grid">{network?.sources.map(source => <article className="network-card" key={source.name}><span className={`status-dot ${source.status === 'connected' || source.status === 'user-reported' ? 'green' : 'yellow'}`}/><strong>{source.name}</strong><small>{source.categories.map(category => category.replace(/_/g, ' ')).join(' · ')}</small><small>{source.record_count} normalized {source.record_count === 1 ? 'record' : 'records'} · {source.status}</small></article>)}</div>
+    <div className="network-summary"><strong>{network?.normalized_count ?? (loading ? '…' : 0)}</strong><span>account-specific records in {network?.schema || 'AgroAIRecord/v1'}</span><small>Provenance: {network?.data_quality || (loading ? 'Loading…' : 'not available')}{network?.last_sync ? ` · Synced ${new Date(network.last_sync).toLocaleString()}` : ''}</small></div>
+    {network && <><p className="network-limitation">{network.limitation}</p>{network.records.length === 0 ? <p className="network-empty">No farm records yet. Set up a farm profile to see account-specific records here.</p> : <div className="normalized-records">{network.records.map(record => {
+      const headline = typeof record.data.crop === 'string' ? record.data.crop : typeof record.data.farm_type === 'string' ? record.data.farm_type.replace(/_/g, ' ') : typeof record.data.temperature_c === 'number' ? `${record.data.temperature_c} °C` : typeof record.data.moisture_percent === 'number' ? `${record.data.moisture_percent}% moisture` : record.record_type.replace(/_/g, ' ')
+      return <article className="normalized-record" key={record.id}><div className="normalized-record-heading"><div><strong>{headline}</strong><small>{record.record_type.replace(/_/g, ' ')} · {record.source}</small></div><span className={`quality-badge quality-${record.quality}`}>{record.quality}</span></div>{record.observed_at && <small className="record-time">Observed {new Date(record.observed_at).toLocaleString()}</small>}{record.location && <small className="record-coordinates">GeoJSON point [lon, lat]: {record.location.coordinates.map(value => Number(value.toFixed(5))).join(', ')}</small>}{record.limitations.length > 0 && <small className="record-limitation">{record.limitations.join(' ')}</small>}<details><summary>View normalized record</summary><pre>{JSON.stringify(record, null, 2)}</pre></details></article>
+    })}</div>}</>}
   </section>
 }
 function SectionHeader({ eyebrow, title, action }: { eyebrow?: string; title: string; action?: React.ReactNode }) { return <div className="section-header">{<div>{eyebrow && <span className="eyebrow">{eyebrow}</span>}<h2>{title}</h2></div>}{action}</div> }

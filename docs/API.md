@@ -15,6 +15,10 @@ The API is served at `http://localhost:8000`.
 | POST | `/api/ai/ask` | Ask the agriculture assistant |
 | POST | `/api/disease/analyze` | Analyze an uploaded crop image |
 | GET | `/api/permissions` | Current permission metadata |
-| GET | `/api/interoperability` | State adapters and normalized records |
+| GET | `/api/interoperability` | Signed-in account's canonical farm and provider records |
 
-All provider output is normalized before it reaches the frontend.
+Provider output is mapped to typed observation contracts before it reaches the
+frontend. `/api/interoperability` serializes the active account's records in
+`AgroAIRecord/v1`, with units, GeoJSON coordinates, timestamps, provenance, and
+limitations. It does not claim to connect state datasets that are not
+integrated.

@@ -129,7 +129,7 @@ class NormalizedGeoJSONPoint(BaseModel):
 class InteroperabilityRecord(BaseModel):
     id: str
     schema_version: Literal["AgroAIRecord/v1"] = Field(default="AgroAIRecord/v1", alias="schema")
-    record_type: Literal["farm_profile", "crop_field", "livestock_group", "weather_observation", "soil_observation", "satellite_observation"]
+    record_type: Literal["farm_profile", "crop_field", "livestock_group", "weather_observation", "soil_observation", "satellite_observation", "market_price_observation"]
     source: str
     quality: Literal["user-reported", "live", "modelled", "historical", "simulated", "unavailable"]
     recorded_at: datetime
@@ -146,6 +146,29 @@ class InteroperabilitySource(BaseModel):
     status: Literal["connected", "user-reported", "simulated", "unavailable"]
     categories: list[str]
     record_count: int = Field(ge=0)
+
+
+class MarketPriceRecord(BaseModel):
+    state: str
+    district: str
+    market: str
+    commodity: str
+    variety: str | None = None
+    grade: str | None = None
+    arrival_date: date | None = None
+    min_price: float | None = None
+    max_price: float | None = None
+    modal_price: float | None = None
+
+
+class MarketPricesResponse(BaseModel):
+    source: str = "data.gov.in / AGMARKNET"
+    state: str
+    crop: str | None = None
+    fetched_at: datetime
+    record_count: int = Field(ge=0)
+    records: list[MarketPriceRecord]
+    limitation: str
 
 
 class InteroperabilityResponse(BaseModel):

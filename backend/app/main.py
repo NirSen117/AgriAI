@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 from .advisory import build_advisory, localize_advisory
 from .config import get_settings
 from .interoperability import normalize_interoperability
+from .market_data import DataGovMarketPriceProvider
 from .providers import (
     GeminiAIProvider, GeminiDiseaseProvider, VertexAIProvider,
     BhuvanLulcProvider, MockAIProvider, MockDiseaseProvider, MockSatelliteProvider, MockSoilProvider, MockWeatherProvider,
@@ -27,7 +28,7 @@ from .providers import (
 from .schemas import (AdvisoryItem, AdvisoryResponse, AskRequest, AskResponse, DashboardResponse, DiagnosisRequest,
                       DiagnosisResponse, FarmProfile, HealthResponse, InteroperabilityResponse,
                       OnboardingResponse, PermissionResponse, Location, ProviderStatus,
-                      SatelliteObservation, SystemStatus)
+                      MarketPricesResponse, SatelliteObservation, SystemStatus)
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -168,7 +169,9 @@ def _log_gemini_failure(operation: str, exc: Exception) -> None:
             message[:500] or "no provider message",
         )
     else:
-        logger.error("Gemini %s failed (exception=%s, http_status=%s)", operation, type(exc).__name__, status, exc_info=True)
+        # Exception text/tracebacks from urllib may include the request's API
+        # key header (for example, when a malformed secret contains newlines).
+        logger.error("Gemini %s failed (exception=%s, http_status=%s)", operation, type(exc).__name__, status)
 
 
 @app.middleware("http")
@@ -209,6 +212,8 @@ satellite = MockSatelliteProvider() if settings.mock_mode else (
                        settings.bhuvan_lulc_year, settings.http_timeout_seconds)
     if settings.bhuvan_api_token else None
 )
+market_prices_provider = DataGovMarketPriceProvider(settings.data_gov_in_api_key,
+                                                    min(settings.http_timeout_seconds, 8.0))
 ai_fallback: GeminiAIProvider | None = (
     GeminiAIProvider(settings.gemini_api_key, settings.gemini_model, settings.http_timeout_seconds,
                     settings.gemini_fallback_models.split(","))
@@ -264,6 +269,9 @@ def status() -> SystemStatus:
         ProviderStatus(name="disease", available=isinstance(disease, GeminiDiseaseProvider),
                        mode="live" if isinstance(disease, GeminiDiseaseProvider) else "fallback",
                        message="Gemini key configured; access is checked when image diagnosis runs" if isinstance(disease, GeminiDiseaseProvider) else "Gemini unavailable: no API key is configured"),
+        ProviderStatus(name="market_prices", available=market_prices_provider.available,
+                       mode="live" if market_prices_provider.available else "fallback",
+                       message="Data.gov.in AGMARKNET daily market prices configured" if market_prices_provider.available else "Data.gov.in API key is not configured"),
     ]
     return SystemStatus(status="ok", mock_mode=settings.mock_mode, providers=providers)
 
@@ -512,4 +520,28 @@ def demo(user_id: str = Depends(require_firebase_user)) -> DashboardResponse:
 @app.get("/api/interoperability", response_model=InteroperabilityResponse, tags=["interoperability"])
 def interoperability(user_id: str = Depends(require_firebase_user)) -> InteroperabilityResponse:
     profile = _load_profile(user_id)
-    return normalize_interoperability(profile, dashboard(user_id))
+    market_feed = None
+    if profile and profile.location.state and market_prices_provider.available:
+        try:
+            market_feed = market_prices_provider.get_prices(
+                profile.location.state, profile.crops[0] if profile.crops else None)
+        except RuntimeError:
+            pass
+    return normalize_interoperability(profile, dashboard(user_id), market_feed,
+                                      market_feed_configured=market_prices_provider.available)
+
+
+@app.get("/api/market-prices", response_model=MarketPricesResponse, tags=["market data"])
+def market_prices(crop: str | None = Query(default=None, max_length=120),
+                  user_id: str = Depends(require_firebase_user)) -> MarketPricesResponse:
+    profile = _load_profile(user_id)
+    if not profile:
+        raise HTTPException(status_code=409, detail="Set up your farm location to find market prices.")
+    state = (profile.location.state or "").strip()
+    if not state:
+        raise HTTPException(status_code=409, detail="Add your state to the farm location to find market prices.")
+    selected_crop = (crop or (profile.crops[0] if profile.crops else None) or "").strip() or None
+    try:
+        return market_prices_provider.get_prices(state, selected_crop)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None

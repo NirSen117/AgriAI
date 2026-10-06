@@ -9,6 +9,7 @@ from .schemas import (
     InteroperabilityResponse,
     InteroperabilitySource,
     Location,
+    MarketPricesResponse,
     NormalizedGeoJSONPoint,
 )
 
@@ -167,10 +168,29 @@ def _records(profile: FarmProfile | None, snapshot: DashboardResponse,
 
 
 def normalize_interoperability(profile: FarmProfile | None,
-                               snapshot: DashboardResponse) -> InteroperabilityResponse:
+                               snapshot: DashboardResponse,
+                               market_prices: MarketPricesResponse | None = None,
+                               market_feed_configured: bool = False) -> InteroperabilityResponse:
     """Build canonical per-account records without filling gaps with invented values."""
     timestamp = datetime.now(timezone.utc)
     records = _records(profile, snapshot, timestamp)
+    if market_prices:
+        for index, price in enumerate(market_prices.records):
+            observed_at = (datetime.combine(price.arrival_date, datetime.min.time(), tzinfo=timezone.utc)
+                           if price.arrival_date else None)
+            records.append(InteroperabilityRecord(
+                id=f"market-price-{index + 1}", record_type="market_price_observation",
+                source="Data.gov.in / AGMARKNET", quality="historical", recorded_at=timestamp,
+                observed_at=observed_at,
+                units={"min_price": "INR/quintal", "max_price": "INR/quintal",
+                       "modal_price": "INR/quintal"},
+                data={"state": price.state, "district": price.district, "market": price.market,
+                      "commodity": price.commodity, "variety": price.variety, "grade": price.grade,
+                      "arrival_date": price.arrival_date.isoformat() if price.arrival_date else None,
+                      "min_price": price.min_price, "max_price": price.max_price,
+                      "modal_price": price.modal_price},
+                limitations=["Daily reported wholesale prices may be delayed or missing; they are not guaranteed live quotes or a farmer's realized sale price."],
+            ))
     source_groups: dict[str, list[InteroperabilityRecord]] = {}
     for record in records:
         source_groups.setdefault(record.source, []).append(record)
@@ -183,6 +203,11 @@ def normalize_interoperability(profile: FarmProfile | None,
         categories=list(dict.fromkeys(record.record_type for record in source_records)),
         record_count=len(source_records),
     ) for name, source_records in source_groups.items()]
+    if not market_prices:
+        sources.append(InteroperabilitySource(
+            name="Data.gov.in / AGMARKNET",
+            status="unavailable", categories=["market_price_observation"], record_count=0,
+        ))
     counts: dict[str, int] = {}
     for record in records:
         counts[record.quality] = counts.get(record.quality, 0) + 1
@@ -191,5 +216,7 @@ def normalize_interoperability(profile: FarmProfile | None,
     return InteroperabilityResponse(
         sources=sources, records=records, normalized_count=len(records), data_quality=quality,
         last_sync=timestamp,
-        limitation="This feed represents the signed-in farm and configured providers. State government datasets are not connected yet.",
+        limitation=("This feed represents the signed-in farm, configured providers, and national AGMARKNET daily mandi prices. "
+                    "Other state government datasets are not connected yet." if market_feed_configured else
+                    "This feed represents the signed-in farm and configured providers. The national AGMARKNET feed is unavailable until its Data.gov.in API key and service are available; other state datasets are not connected yet."),
     )

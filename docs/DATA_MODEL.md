@@ -23,11 +23,12 @@ records; it no longer fabricates state adapters or sample records.
 ## Current coverage and limits
 
 The endpoint currently normalizes a signed-in farmer's profile and the
-configured weather, soil, and Bhuvan outputs. Bhuvan LULC is labeled historical
-land-cover context, and Open-Meteo soil moisture is labeled modelled rather than
-a sensor reading. State government datasets and cross-state connectors are not
-integrated yet. The Data network page reports that limit instead of showing
-invented state adapters.
+configured weather, soil, Bhuvan, and data.gov.in AGMARKNET outputs. Bhuvan LULC
+is labeled historical land-cover context, Open-Meteo soil moisture is labeled
+modelled rather than a sensor reading, and mandi prices are historical daily
+wholesale observations in INR per quintal. Other state government datasets and
+cross-state connectors are not integrated yet. The Data network page reports
+that limit instead of showing invented state adapters.
 
 Farm profiles are shared between devices through Firestore by the frontend;
 the API's SQLite profile is a per-instance working cache. Diagnosis history is

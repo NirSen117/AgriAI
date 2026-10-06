@@ -18,6 +18,15 @@ export type Interoperability = {
   last_sync: string
   limitation: string
 }
+export type MarketPrices = {
+  source: string
+  state: string
+  crop?: string | null
+  fetched_at: string
+  record_count: number
+  records: { state: string; district: string; market: string; commodity: string; variety?: string | null; grade?: string | null; arrival_date?: string | null; min_price?: number | null; max_price?: number | null; modal_price?: number | null }[]
+  limitation: string
+}
 
 const profileKey = (uid: string) => `agriai-farm-profile:${uid}`
 const localProfile = (uid?: string): Profile | null => {
@@ -145,4 +154,5 @@ export const api = {
   diagnose: (symptoms: string, crop?: string, image_url?: string, document_url?: string, language?: string) => request<Diagnosis>('/disease/analyze', { method: 'POST', body: JSON.stringify({ symptoms, crop, image_url, document_url, language }) }),
   permissions: () => request<{ location: boolean; camera: boolean; notifications: boolean; explanation: string }>('/permissions', undefined, { location: false, camera: false, notifications: false, explanation: 'Permissions are optional and only requested after your action.' }),
   interoperability: () => request<Interoperability>('/interoperability'),
+  marketPrices: (crop?: string) => request<MarketPrices>(`/market-prices${crop ? `?crop=${encodeURIComponent(crop)}` : ''}`),
 }

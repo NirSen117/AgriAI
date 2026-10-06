@@ -21,7 +21,8 @@ _GEMINI_FAILOVER_STATUSES = {404, 429, 500, 502, 503, 504}
 
 
 def _model_order(primary: str, fallbacks: list[str] | None) -> list[str]:
-    return list(dict.fromkeys([primary, *(model.strip() for model in (fallbacks or []) if model.strip())]))
+    primary = primary.strip()
+    return list(dict.fromkeys([model for model in (primary, *(model.strip() for model in (fallbacks or []))) if model]))
 
 
 def _gemini_generate_with_failover(api_key: str, models: list[str], payload_for_model,
@@ -295,7 +296,7 @@ class GeminiAIProvider:
 
     def __init__(self, api_key: str, model: str, timeout_seconds: float,
                  fallback_models: list[str] | None = None) -> None:
-        self.api_key = api_key
+        self.api_key = api_key.strip()
         self.model = model
         self.models = _model_order(model, fallback_models)
         self.timeout_seconds = timeout_seconds
@@ -345,18 +346,18 @@ class GeminiAIProvider:
             "and same number of items. Translate text only. Preserve every number, unit, uncertainty, and meaning; "
             "do not add facts, recommendations, or diagnoses."
         )
-        payload = json.dumps({
-            "systemInstruction": {"parts": [{"text": instruction}]},
-            "contents": [{"role": "user", "parts": [{"text": json.dumps(source, ensure_ascii=False)}]}],
-            "generationConfig": {"temperature": 0, "maxOutputTokens": 900,
-                                 "thinkingConfig": _thinking_config(self.model), "responseMimeType": "application/json"},
-        }).encode()
-        request = Request(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
-            data=payload, headers={"Content-Type": "application/json", "x-goog-api-key": self.api_key}, method="POST",
+        result = _gemini_generate_with_failover(
+            self.api_key,
+            self.models,
+            lambda model: {
+                "systemInstruction": {"parts": [{"text": instruction}]},
+                "contents": [{"role": "user", "parts": [{"text": json.dumps(source, ensure_ascii=False)}]}],
+                "generationConfig": {"temperature": 0, "maxOutputTokens": 900,
+                                     "thinkingConfig": _thinking_config(model), "responseMimeType": "application/json"},
+            },
+            self.timeout_seconds,
+            "advisory translation",
         )
-        with urlopen(request, timeout=self.timeout_seconds) as response:
-            result = json.load(response)
         text = _response_text(result)
         translated = json.loads(text)
         if not isinstance(translated.get("summary"), str) or len(translated.get("items", [])) != len(advisory.items):
@@ -374,7 +375,7 @@ class GeminiDiseaseProvider:
 
     def __init__(self, api_key: str, model: str, timeout_seconds: float,
                  fallback_models: list[str] | None = None) -> None:
-        self.api_key = api_key
+        self.api_key = api_key.strip()
         self.model = model
         self.models = _model_order(model, fallback_models)
         self.timeout_seconds = timeout_seconds

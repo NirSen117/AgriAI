@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +15,7 @@ class Settings(BaseSettings):
     weather_api_key: str | None = None
     ai_api_key: str | None = None
     gemini_api_key: str | None = None
+    data_gov_in_api_key: str | None = None
     gemini_model: str = "gemini-3.5-flash"
     gemini_fallback_models: str = "gemini-3.5-flash-lite,gemini-3.5-flash,gemini-3.6-flash"
     firebase_project_id: str | None = None
@@ -31,6 +33,13 @@ class Settings(BaseSettings):
     database_path: str = "./data/agriai.db"
     ai_rate_limit_per_minute: int = 15
     max_request_bytes: int = 7 * 1024 * 1024
+
+    @field_validator("gemini_api_key", "bhuvan_api_token", "data_gov_in_api_key", mode="before")
+    @classmethod
+    def strip_provider_credentials(cls, value: str | None) -> str | None:
+        if isinstance(value, str):
+            value = value.strip()
+        return value or None
 
     # Keep names aligned with the documented deployment variables so providers
     # can be enabled without an additional translation layer.

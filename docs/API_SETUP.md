@@ -12,6 +12,7 @@ No API key is needed to run the deterministic demo. Copy `.env.example` to
 | Modelled surface soil moisture | none | [Open-Meteo forecast API](https://open-meteo.com/en/docs) | Same no-key service as weather; model estimate, not a farm sensor reading. |
 | ISRO/NRSC Bhuvan LULC AOI statistics | `BHUVAN_API_TOKEN` | [Bhuvan API portal](https://bhuvan-app1.nrsc.gov.in/api/) | Copy the portal's daily access token into the backend `.env`; AOI statistics are historical land-cover context, not live NDVI. |
 | ISRO/NRSC Bhuvan land-cover map | none | [Bhuvan WMS guide](https://bhuvan.nrsc.gov.in/wiki/index.php/How_to_use_WMS_services) | The field map also streams public LULC imagery without an API token. |
+| Mandi market prices | `DATA_GOV_IN_API_KEY` | [data.gov.in API key](https://www.data.gov.in/) | AGMARKNET daily wholesale min/max/modal prices; availability and reporting dates vary by market. |
 | SoilGrids / NASA POWER | none | [SoilGrids](https://rest.isric.org/) / [NASA POWER](https://power.larc.nasa.gov/docs/) | Not currently used in the live pipeline. SoilGrids REST v2 is paused by ISRIC; do not rely on it for this demo. |
 | Firebase email/password sign-in (optional) | `VITE_FIREBASE_API_KEY` | Firebase Console → Project settings → Your apps → Web app config | Firebase Spark has no-cost Authentication usage within its current limits. This web key identifies the Firebase project and is public by design; restrict it to Firebase APIs and your app domains. |
 | Vertex AI Gemini (optional) | `VERTEX_AI_PROJECT`, `VERTEX_AI_LOCATION`, `VERTEX_AI_MODEL` | Google Cloud project with Vertex AI API and Application Default Credentials | Separate Vertex AI quotas/billing; mock AI is used automatically when unavailable. |
@@ -46,6 +47,17 @@ the root `.env`; do not paste it into frontend code or logs. The API request
 uses a small WKT area around the saved farm pin. AOI statistics are from the
 selected LULC mapping cycle and are not current NDVI or a surveyed farm parcel.
 The public WMS map still needs recognized state and saved coordinates.
+
+## Mandi market prices from data.gov.in
+
+The Market Prices page reads the nationwide AGMARKNET current daily price
+dataset through the data.gov.in resource API. Set `DATA_GOV_IN_API_KEY` in the
+backend environment. The page filters observations to the farm's saved state
+and selected crop and shows the reporting market, date, and minimum, modal, and
+maximum price in INR per quintal. These are reported wholesale observations;
+they may be delayed or missing and are not guaranteed live quotes or the price
+a farmer will receive. For Cloud Run, store the key in Secret Manager and map
+the secret to `DATA_GOV_IN_API_KEY` rather than putting it in an image or Git.
 Gemini handles farm chat, advisory translation, and image/symptom triage. If
 Gemini has no key or is unreachable, those AI features return an unavailable
 message instead of a mock answer.

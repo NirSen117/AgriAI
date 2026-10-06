@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowRight, Bell, Bot, Camera, Check, ChevronLeft, ChevronRight, CloudSun, Database, Droplets, Gauge, Home, Leaf, LogOut, MapPin, Menu, Mic, MicOff, Moon, Plus, ShieldCheck, Sprout, Sun, Thermometer, Upload, UserRound, Wind, X } from 'lucide-react'
-import { api, Advisory, Dashboard, Diagnosis, Interoperability, Location, Profile } from './api'
+import { ArrowRight, Bell, Bot, Camera, Check, ChevronLeft, ChevronRight, CloudSun, Database, Droplets, Gauge, Home, Leaf, LogOut, MapPin, Menu, Mic, MicOff, Moon, Plus, ShieldCheck, Sprout, Sun, Thermometer, TrendingUp, Upload, UserRound, Wind, X } from 'lucide-react'
+import { api, Advisory, Dashboard, Diagnosis, Interoperability, Location, MarketPrices, Profile } from './api'
 import { AuthModal } from './AuthModal'
 import { AuthUser, firebaseAuth } from './firebaseAuth'
 import { DiagnosisHistoryEntry, loadDiagnosisHistory, saveDiagnosisHistory } from './diagnosisHistory'
 import { languages, t } from './i18n'
 
-type Page = 'overview' | 'fields' | 'advice' | 'network' | 'permissions'
+type Page = 'overview' | 'fields' | 'advice' | 'network' | 'markets' | 'permissions'
 type SpeechRecognitionLike = {
   lang: string; interimResults: boolean; continuous: boolean
   onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null
@@ -16,7 +16,7 @@ type SpeechRecognitionLike = {
 }
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike
 const speechLocales: Record<string, string> = { en: 'en-IN', hi: 'hi-IN', kn: 'kn-IN', ta: 'ta-IN', te: 'te-IN', bn: 'bn-IN', mr: 'mr-IN' }
-const nav = [{ id: 'overview' as Page, key: 'overview' as const, icon: Home }, { id: 'fields' as Page, key: 'fields' as const, icon: Sprout }, { id: 'advice' as Page, key: 'advice' as const, icon: Leaf }, { id: 'network' as Page, label: 'Data network', icon: Database }, { id: 'permissions' as Page, key: 'permissions' as const, icon: ShieldCheck }]
+const nav = [{ id: 'overview' as Page, key: 'overview' as const, icon: Home }, { id: 'fields' as Page, key: 'fields' as const, icon: Sprout }, { id: 'advice' as Page, key: 'advice' as const, icon: Leaf }, { id: 'network' as Page, label: 'Data network', icon: Database }, { id: 'markets' as Page, label: 'Market prices', icon: TrendingUp }, { id: 'permissions' as Page, key: 'permissions' as const, icon: ShieldCheck }]
 type FarmAlert = { id: string; title: string; detail: string; severity: 'high' | 'medium' }
 const getFarmAlerts = (dashboard?: Dashboard): FarmAlert[] => {
   if (!dashboard) return []
@@ -168,11 +168,12 @@ function App() {
         {page === 'fields' && <Fields dashboard={dashboard} language={language} onDiagnose={() => setDiagnosis(true)} onOnboard={() => setShowOnboarding(true)} />}
         {page === 'advice' && <Advice advice={advice} language={language} />}
         {page === 'network' && <DataNetwork userId={authUser.uid} />}
+        {page === 'markets' && <MarketPricesPage userId={authUser.uid} profile={profile} />}
         {page === 'permissions' && <Permissions language={language} notificationPermission={notificationPermission} onRequestNotifications={() => void requestNotifications()} />}
       </div>
     </main>
     {mobileNavOpen && <button className="mobile-nav-backdrop" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)}/>}
-    <div className="mobile-nav">{nav.slice(0, 4).map(item => <button className={page === item.id ? 'active' : ''} onClick={() => setPage(item.id)} key={item.id}><item.icon size={18}/><span>{item.key ? t(language, item.key) : item.label}</span></button>)}</div>
+    <div className="mobile-nav">{nav.filter(item => item.id !== 'permissions').map(item => <button className={page === item.id ? 'active' : ''} onClick={() => setPage(item.id)} key={item.id}><item.icon size={18}/><span>{item.key ? t(language, item.key) : item.id === 'markets' ? 'Markets' : item.label}</span></button>)}</div>
     {showOnboarding && <Onboarding profile={profile} authName={authUser.displayName} language={language} onClose={() => setShowOnboarding(false)} onSaved={async (p, synced) => { setShowOnboarding(false); await runAnalysis(false); setDashboard(d => d ? { ...d, profile: p, profile_sync: synced ? 'synced' : 'unavailable' } : d); if (!synced) setNotice(current => `${current} · Farm profile saved here but device sync needs Firestore`) }} />}
     {diagnosis && <DiagnosisModal crop={profile?.crops[0]} language={language} onClose={() => setDiagnosis(false)} />}
     {assistant && <Assistant crop={profile?.crops[0]} language={language} onClose={() => setAssistant(false)} />}
@@ -205,6 +206,31 @@ function DataNetwork({ userId }: { userId: string }) {
       const headline = typeof record.data.crop === 'string' ? record.data.crop : typeof record.data.farm_type === 'string' ? record.data.farm_type.replace(/_/g, ' ') : typeof record.data.temperature_c === 'number' ? `${record.data.temperature_c} °C` : typeof record.data.moisture_percent === 'number' ? `${record.data.moisture_percent}% moisture` : record.record_type.replace(/_/g, ' ')
       return <article className="normalized-record" key={record.id}><div className="normalized-record-heading"><div><strong>{headline}</strong><small>{record.record_type.replace(/_/g, ' ')} · {record.source}</small></div><span className={`quality-badge quality-${record.quality}`}>{record.quality}</span></div>{record.observed_at && <small className="record-time">Observed {new Date(record.observed_at).toLocaleString()}</small>}{record.location && <small className="record-coordinates">GeoJSON point [lon, lat]: {record.location.coordinates.map(value => Number(value.toFixed(5))).join(', ')}</small>}{record.limitations.length > 0 && <small className="record-limitation">{record.limitations.join(' ')}</small>}<details><summary>View normalized record</summary><pre>{JSON.stringify(record, null, 2)}</pre></details></article>
     })}</div>}</>}
+  </section>
+}
+function MarketPricesPage({ userId, profile }: { userId: string; profile?: Profile | null }) {
+  const [selectedCrop, setSelectedCrop] = useState('')
+  const [prices, setPrices] = useState<MarketPrices>()
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const crop = selectedCrop || profile?.crops?.[0] || ''
+  const loadPrices = async () => {
+    setLoading(true)
+    setError('')
+    try { setPrices(await api.marketPrices(crop || undefined)) }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not load mandi prices.') }
+    finally { setLoading(false) }
+  }
+  useEffect(() => { void loadPrices() }, [userId, crop])
+  const money = (value?: number | null) => value == null ? '—' : `₹${new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(value)}`
+  return <section className="market-page">
+    <SectionHeader eyebrow="DATA.GOV.IN · AGMARKNET" title="Market prices" action={<button className="secondary-button" onClick={() => void loadPrices()} disabled={loading}><TrendingUp size={16}/>{loading ? 'Loading…' : 'Refresh'}</button>} />
+    <p className="muted">Daily reported wholesale prices from markets in {profile?.location.state || 'your farm state'} for the crops in your farm profile.</p>
+    {profile?.crops && profile.crops.length > 1 && <label className="market-crop-filter">Crop<select value={crop} onChange={event => setSelectedCrop(event.target.value)}>{profile.crops.map(item => <option key={item} value={item}>{item}</option>)}</select></label>}
+    {error && <p className="network-error" role="alert">{error}</p>}
+    {loading && !prices && <p className="market-empty">Loading today’s available market reports…</p>}
+    {!loading && !error && prices?.records.length === 0 && <p className="market-empty">No matching records were returned. The feed may not have published this crop or state’s latest prices yet.</p>}
+    {prices?.records.length ? <><div className="market-meta"><span>{prices.record_count} market reports</span><span>Fetched {new Date(prices.fetched_at).toLocaleString()}</span></div><div className="market-price-grid">{prices.records.map((record, index) => <article className="market-price-card" key={`${record.market}-${record.commodity}-${record.arrival_date}-${index}`}><div className="market-card-heading"><div><strong>{record.market}</strong><small>{record.district}, {record.state}</small></div><span>{record.arrival_date || 'Date unavailable'}</span></div><h3>{record.commodity}</h3><p>{[record.variety, record.grade].filter(Boolean).join(' · ') || 'Variety/grade not reported'}</p><div className="market-price-values"><div><small>Minimum</small><strong>{money(record.min_price)}</strong></div><div><small>Modal</small><strong>{money(record.modal_price)}</strong></div><div><small>Maximum</small><strong>{money(record.max_price)}</strong></div></div><small className="market-unit">Reported price · ₹ per quintal</small></article>)}</div><p className="market-limitation">{prices.limitation} Source: <a href="https://www.data.gov.in/catalog/current-daily-price-various-commodities-various-markets-mandi" target="_blank" rel="noreferrer">Data.gov.in / AGMARKNET</a>.</p></> : null}
   </section>
 }
 function SectionHeader({ eyebrow, title, action }: { eyebrow?: string; title: string; action?: React.ReactNode }) { return <div className="section-header">{<div>{eyebrow && <span className="eyebrow">{eyebrow}</span>}<h2>{title}</h2></div>}{action}</div> }

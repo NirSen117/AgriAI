@@ -361,6 +361,11 @@ html[data-theme="dark"] .quality-modelled { background: #203c46; color: #b8dce9;
 .market-price-values strong { margin-top: 3px; font-size: 13px; overflow-wrap: anywhere; }
 .market-unit { display: block; margin-top: 9px; }
 .market-empty, .market-limitation { padding: 14px; border-radius: 9px; background: var(--card); color: var(--muted); font-size: 12px; line-height: 1.6; }
+.market-feed-unavailable { margin: 16px 0; padding: 16px; border: 1px solid var(--line); border-left: 4px solid #d6a449; border-radius: 10px; background: var(--card); color: var(--ink); }
+.market-feed-unavailable strong { display: block; margin-bottom: 6px; }
+.market-feed-unavailable p, .market-feed-unavailable a { color: var(--muted); font-size: 13px; line-height: 1.55; }
+.market-feed-unavailable p { margin: 0 0 8px; }
+.market-feed-unavailable a { color: var(--green); }
 .market-limitation a { color: var(--green); }
 @media (max-width: 650px) {
   .market-page .section-header { align-items: center; gap: 8px; }

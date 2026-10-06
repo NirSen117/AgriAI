@@ -271,7 +271,7 @@ def status() -> SystemStatus:
                        message="Gemini key configured; access is checked when image diagnosis runs" if isinstance(disease, GeminiDiseaseProvider) else "Gemini unavailable: no API key is configured"),
         ProviderStatus(name="market_prices", available=market_prices_provider.available,
                        mode="live" if market_prices_provider.available else "fallback",
-                       message="Data.gov.in AGMARKNET daily market prices configured" if market_prices_provider.available else "Data.gov.in API key is not configured"),
+                       message="Data.gov.in AGMARKNET key configured; availability depends on the government feed" if market_prices_provider.available else "Data.gov.in API key is not configured"),
     ]
     return SystemStatus(status="ok", mock_mode=settings.mock_mode, providers=providers)
 

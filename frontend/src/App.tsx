@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowRight, Bell, Bot, Camera, Check, ChevronLeft, ChevronRight, CloudSun, Database, Droplets, Gauge, Home, Leaf, LogOut, MapPin, Menu, Mic, MicOff, Moon, Plus, ShieldCheck, Sprout, Sun, Thermometer, TrendingUp, Upload, UserRound, Wind, X } from 'lucide-react'
 import { api, Advisory, Dashboard, Diagnosis, Interoperability, Location, MarketPrices, Profile } from './api'
+import type { FarmEntry } from './farmStore'
 import { AuthModal } from './AuthModal'
 import { AuthUser, firebaseAuth } from './firebaseAuth'
 import { DiagnosisHistoryEntry, loadDiagnosisHistory, saveDiagnosisHistory } from './diagnosisHistory'
@@ -16,6 +17,18 @@ type SpeechRecognitionLike = {
 }
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike
 const speechLocales: Record<string, string> = { en: 'en-IN', hi: 'hi-IN', kn: 'kn-IN', ta: 'ta-IN', te: 'te-IN', bn: 'bn-IN', mr: 'mr-IN' }
+const MAX_CROP_PHOTO_BYTES = 15 * 1024 * 1024
+const INDIAN_CROPS = [
+  'Arecanut', 'Bajra (Pearl millet)', 'Banana', 'Barley', 'Bean', 'Beetroot', 'Bengal gram (Chickpea)',
+  'Black gram (Urad)', 'Black pepper', 'Cabbage', 'Cardamom', 'Carrot', 'Cashew', 'Castor', 'Cauliflower',
+  'Chilli', 'Citrus', 'Coconut', 'Coffee', 'Coriander', 'Cotton', 'Cowpea', 'Cucumber', 'Drumstick',
+  'Finger millet (Ragi)', 'Foxtail millet', 'Garlic', 'Ginger', 'Grapes', 'Green gram (Moong)', 'Groundnut',
+  'Guava', 'Jowar (Sorghum)', 'Lentil (Masoor)', 'Maize', 'Mango', 'Mustard', 'Oat', 'Okra (Lady finger)',
+  'Onion', 'Orange', 'Papaya', 'Pearl millet', 'Peas', 'Pigeon pea (Tur/Arhar)', 'Pineapple', 'Potato',
+  'Pomegranate', 'Ragi', 'Rapeseed', 'Rice', 'Sesame', 'Sorghum', 'Soybean', 'Sugarcane',
+  'Sunflower', 'Sweet potato', 'Tea', 'Tomato', 'Turmeric', 'Watermelon', 'Wheat', 'Other',
+]
+const MAX_DIAGNOSIS_IMAGE_BYTES = 3 * 1024 * 1024
 const nav = [{ id: 'overview' as Page, key: 'overview' as const, icon: Home }, { id: 'fields' as Page, key: 'fields' as const, icon: Sprout }, { id: 'advice' as Page, key: 'advice' as const, icon: Leaf }, { id: 'network' as Page, label: 'Data network', icon: Database }, { id: 'markets' as Page, label: 'Market prices', icon: TrendingUp }, { id: 'permissions' as Page, key: 'permissions' as const, icon: ShieldCheck }]
 type FarmAlert = { id: string; title: string; detail: string; severity: 'high' | 'medium' }
 const getFarmAlerts = (dashboard?: Dashboard): FarmAlert[] => {
@@ -39,10 +52,13 @@ const dataNotice = (dashboard: Dashboard) => {
 function App() {
   const [page, setPage] = useState<Page>('overview')
   const [dashboard, setDashboard] = useState<Dashboard>()
+  const [farms, setFarms] = useState<FarmEntry[]>([])
+  const [activeFarmId, setActiveFarmId] = useState('')
   const [advice, setAdvice] = useState<Advisory>()
   const [farmAnalysis, setFarmAnalysis] = useState<{ answer: string; source: string }>()
   const [analysisLoading, setAnalysisLoading] = useState(false)
   const [showOnboarding, setShowOnboarding] = useState(false)
+  const [onboardingFarmId, setOnboardingFarmId] = useState<string>()
   const [diagnosis, setDiagnosis] = useState(false)
   const [assistant, setAssistant] = useState(false)
   const [authUser, setAuthUser] = useState<AuthUser | undefined>(() => firebaseAuth.currentUser())
@@ -59,11 +75,11 @@ function App() {
     return firebaseAuth.subscribe(user => { setAuthUser(user); setAuthReady(true) })
   }, [])
   useEffect(() => {
-    if (!authUser) { setDashboard(undefined); setAdvice(undefined); return }
+    if (!authUser) { setDashboard(undefined); setAdvice(undefined); setFarms([]); setActiveFarmId(''); return }
     Promise.all([api.dashboard(), api.advisory()]).then(([nextDashboard, nextAdvice]) => {
-      setDashboard(nextDashboard); setAdvice(nextAdvice)
+      setDashboard(nextDashboard); setAdvice(nextAdvice); setFarms(nextDashboard.farms || []); setActiveFarmId(nextDashboard.active_farm_id || '')
       setNotice(`${dataNotice(nextDashboard)}${nextDashboard.profile_sync === 'unavailable' ? ' · Farm data sync is unavailable; enable Firestore to sync devices' : ''}`)
-      if (!nextDashboard.profile) setShowOnboarding(true)
+      if (!nextDashboard.profile) { setOnboardingFarmId(undefined); setShowOnboarding(true) }
     })
   }, [authUser?.uid])
   useEffect(() => {
@@ -99,12 +115,12 @@ function App() {
     }
     if (savedProfile.preferred_language !== uiLanguage) {
       const updated = { ...savedProfile, preferred_language: uiLanguage }
-      void api.onboarding(updated).then(async () => {
+      void api.onboarding(updated, activeFarmId || undefined).then(async () => {
         setDashboard(current => current ? { ...current, profile: updated } : current)
         setAdvice(await api.advisory())
       })
     }
-  }, [dashboard?.profile?.preferred_language, uiLanguage])
+  }, [dashboard?.profile?.preferred_language, uiLanguage, activeFarmId])
   const changeLanguage = (next: string) => {
     setUiLanguage(next)
     localStorage.setItem('agriai-ui-language', next)
@@ -148,6 +164,24 @@ function App() {
       setNotice('Farm analysis could not reach the API. Start the backend container and try again.')
     } finally { setAnalysisLoading(false) }
   }
+  const editActiveFarm = () => { setOnboardingFarmId(activeFarmId || undefined); setShowOnboarding(true) }
+  const addFarm = () => { setOnboardingFarmId(undefined); setShowOnboarding(true) }
+  const switchFarm = async (farmId: string) => {
+    const previousFarmId = activeFarmId
+    const selected = farms.find(farm => farm.id === farmId)
+    if (!selected || farmId === previousFarmId) return
+    setActiveFarmId(farmId)
+    setNotice(`Switching to ${selected.profile.farm_name || selected.profile.location.village || 'farm'}…`)
+    try {
+      await api.activateFarm(farmId)
+      const [nextDashboard, nextAdvice] = await Promise.all([api.dashboard(), api.advisory()])
+      setDashboard(nextDashboard); setFarms(nextDashboard.farms || farms); setActiveFarmId(nextDashboard.active_farm_id || farmId)
+      setAdvice(nextAdvice); setFarmAnalysis(undefined); setNotice(dataNotice(nextDashboard))
+    } catch {
+      setActiveFarmId(previousFarmId)
+      setNotice('Could not switch farms. Check your connection and Firestore access, then try again.')
+    }
+  }
   const profile = dashboard?.profile
   const language = uiLanguage || profile?.preferred_language || 'en'
   const firstName = authUser?.displayName?.trim().split(/\s+/)[0] || profile?.farmer_name?.split(' ')[0] || 'Farmer'
@@ -157,6 +191,8 @@ function App() {
     <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
       <div className="sidebar-brand"><Logo/><button className="sidebar-collapse" onClick={() => { const next = !sidebarCollapsed; setSidebarCollapsed(next); localStorage.setItem('agriai-sidebar-collapsed', String(next)) }} aria-label={sidebarCollapsed ? 'Expand navigation' : 'Collapse navigation'} title={sidebarCollapsed ? 'Expand navigation' : 'Collapse navigation'}>{sidebarCollapsed ? <ChevronRight size={17}/> : <ChevronLeft size={17}/>}</button></div>
       <button type="button" className="farm-switcher" onClick={() => { setPage('fields'); setMobileNavOpen(false) }} aria-label="Manage farm and fields"><div className="avatar">{firstName[0]}</div><div><strong>{profile?.farm_name || 'My farm'}</strong><small>{profile?.location.village || 'Set up your farm'}</small></div><ChevronRight size={16}/></button>
+      {farms.length > 0 && <label className="farm-list-control"><span>Active farm</span><select value={activeFarmId} onChange={event => void switchFarm(event.target.value)} aria-label="Switch active farm">{farms.map(farm => <option key={farm.id} value={farm.id}>{farm.profile.farm_name || farm.profile.location.village || 'My farm'}</option>)}</select></label>}
+      <button type="button" className="add-farm-button" onClick={addFarm}><Plus size={15}/> Add another farm</button>
       <nav aria-label="Main navigation">{nav.map(item => <button title={item.key ? t(language, item.key) : item.label} className={page === item.id ? 'active' : ''} onClick={() => { setPage(item.id); setMobileNavOpen(false) }} key={item.id}><item.icon size={19}/><span>{item.key ? t(language, item.key) : item.label}</span></button>)}</nav>
       <div className="sidebar-bottom"><button title="Manage farm and fields" aria-label="Manage farm and fields" onClick={() => setShowOnboarding(true)} className="outline-button"><Plus size={17}/> Add field</button><small className="privacy"><ShieldCheck size={14}/> Your data stays yours</small></div>
     </aside>
@@ -164,8 +200,8 @@ function App() {
       <header className="topbar"><button className="mobile-menu" aria-label="Open menu" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen(value => !value)}><Menu size={22}/></button><div className="breadcrumb"><span>{currentNavItem?.key ? t(language, currentNavItem.key) : currentNavItem?.label || t(language, 'overview')}</span><span className="dot">·</span><span className="muted">{profile?.location.village || 'Set up farm location'}</span></div><div className="top-actions"><label className="language-control" aria-label="Dashboard language"><span>Language</span><select value={language} onChange={event => changeLanguage(event.target.value)}>{languages.map(item => <option key={item.code} value={item.code}>{item.label}</option>)}</select></label><button className="icon-button theme-toggle" aria-label={darkTheme ? 'Switch to light theme' : 'Switch to dark theme'} title={darkTheme ? 'Light theme' : 'Dark theme'} onClick={() => setDarkTheme(value => !value)}>{darkTheme ? <Sun size={19}/> : <Moon size={19}/>}</button><div className="notification-anchor"><button className="icon-button" aria-label={`Notifications, ${alerts.length} alerts`} aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen(value => !value)}><Bell size={19}/>{alerts.length > 0 && <i/>}</button>{notificationsOpen && <div className="notification-popover" role="dialog" aria-label="Farm notifications"><div className="notification-heading"><strong>Farm alerts</strong><button onClick={() => setNotificationsOpen(false)} aria-label="Close notifications"><X size={16}/></button></div>{alerts.length ? <div className="notification-list">{alerts.map(alert => <article className={`notification-item ${alert.severity}`} key={alert.id}><span className="notification-dot"/><div><strong>{alert.title}</strong><p>{alert.detail}</p></div></article>)}</div> : <p className="notifications-empty">You’re all caught up. New weather and farm alerts will appear here.</p>}<div className="notification-footer">{notificationPermission === 'granted' ? <span className="permission-enabled"><Check size={14}/> Browser alerts enabled while dashboard is open</span> : notificationPermission === 'denied' ? <span>Browser alerts are blocked. Allow them in your browser’s site settings.</span> : notificationPermission === 'unsupported' ? <span>This browser does not support desktop alerts.</span> : <button className="enable-notifications" onClick={() => void requestNotifications()}>Enable browser notifications</button>}</div></div>}</div><div className="profile-button" title={authUser?.email || 'Agro AI account'}><div className="avatar small">{authUser?.email[0]?.toUpperCase() || firstName[0]}</div><span className="auth-label">{authUser?.email || 'Signed in'}</span></div>{authUser ? <button className="logout-button" onClick={() => void firebaseAuth.signOut()} aria-label="Log out of Agro AI"><LogOut size={15}/><span>Log out</span></button> : <button className="logout-button" onClick={() => setShowAuth(true)}>Sign in</button>}</div></header>
       <div className="page">
         {notice && <div className="demo-banner"><span><span className="status-dot"/> {notice}</span><button onClick={() => setNotice('')}><X size={15}/></button></div>}
-        {page === 'overview' && <Overview dashboard={dashboard} advice={advice} farmAnalysis={farmAnalysis} analysisLoading={analysisLoading} language={language} greetingName={firstName} onDiagnose={() => setDiagnosis(true)} onOnboard={() => setShowOnboarding(true)} onAnalyze={() => runAnalysis()} />}
-        {page === 'fields' && <Fields dashboard={dashboard} language={language} onDiagnose={() => setDiagnosis(true)} onOnboard={() => setShowOnboarding(true)} />}
+        {page === 'overview' && <Overview dashboard={dashboard} advice={advice} farmAnalysis={farmAnalysis} analysisLoading={analysisLoading} language={language} greetingName={firstName} onDiagnose={() => setDiagnosis(true)} onOnboard={editActiveFarm} onAnalyze={() => runAnalysis()} />}
+        {page === 'fields' && <Fields dashboard={dashboard} language={language} onDiagnose={() => setDiagnosis(true)} onOnboard={editActiveFarm} />}
         {page === 'advice' && <Advice advice={advice} language={language} />}
         {page === 'network' && <DataNetwork userId={authUser.uid} />}
         {page === 'markets' && <MarketPricesPage userId={authUser.uid} profile={profile} />}
@@ -174,7 +210,7 @@ function App() {
     </main>
     {mobileNavOpen && <button className="mobile-nav-backdrop" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)}/>}
     <div className="mobile-nav">{nav.filter(item => item.id !== 'permissions').map(item => <button className={page === item.id ? 'active' : ''} onClick={() => setPage(item.id)} key={item.id}><item.icon size={18}/><span>{item.key ? t(language, item.key) : item.id === 'markets' ? 'Markets' : item.label}</span></button>)}</div>
-    {showOnboarding && <Onboarding profile={profile} authName={authUser.displayName} language={language} onClose={() => setShowOnboarding(false)} onSaved={async (p, synced) => { setShowOnboarding(false); await runAnalysis(false); setDashboard(d => d ? { ...d, profile: p, profile_sync: synced ? 'synced' : 'unavailable' } : d); if (!synced) setNotice(current => `${current} · Farm profile saved here but device sync needs Firestore`) }} />}
+    {showOnboarding && <Onboarding profile={onboardingFarmId ? farms.find(farm => farm.id === onboardingFarmId)?.profile || profile : undefined} farmId={onboardingFarmId} authName={authUser.displayName} language={language} onClose={() => setShowOnboarding(false)} onSaved={async (p, synced, savedFarmId) => { setShowOnboarding(false); setFarmAnalysis(undefined); if (savedFarmId) setActiveFarmId(savedFarmId); const [nextDashboard, nextAdvice] = await Promise.all([api.dashboard(), api.advisory()]); setDashboard(nextDashboard); setFarms(nextDashboard.farms || []); setActiveFarmId(nextDashboard.active_farm_id || savedFarmId || ''); setAdvice(nextAdvice); setNotice(`${dataNotice(nextDashboard)}${!synced ? ' · Farm profile saved here but device sync needs Firestore access' : ''}`) }} />}
     {diagnosis && <DiagnosisModal crop={profile?.crops[0]} language={language} onClose={() => setDiagnosis(false)} />}
     {assistant && <Assistant crop={profile?.crops[0]} language={language} onClose={() => setAssistant(false)} />}
     {!assistant && <button className="assistant-launcher" onClick={() => setAssistant(true)} aria-label="Ask Agro AI"><span className="launcher-icon"><Bot size={22}/></span><span>{t(language, 'askAI')}</span></button>}
@@ -352,12 +388,13 @@ function Fields({ dashboard, language, onDiagnose, onOnboard }: { dashboard?: Da
 function Advice({ advice, language }: { advice?: Advisory; language: string }) { return <><div className="welcome"><div><span className="eyebrow">DECISION SUPPORT</span><h1>{t(language, 'farmAdvice')}</h1><p>{advice?.summary}</p></div><div className="advice-badge"><Bot size={18}/> Powered by Agro AI</div></div><div className="advice-list">{advice?.items.map((item, i) => <ActionCard key={item.title} item={item} index={i}/>)}</div></> }
 function Permissions({ language, notificationPermission, onRequestNotifications }: { language: string; notificationPermission: NotificationPermission | 'unsupported'; onRequestNotifications: () => void }) { const state = { location: false, camera: false, notifications: notificationPermission === 'granted' }; const items = [{ key: 'location' as const, icon: MapPin, title: t(language, 'farmLocation'), text: t(language, 'locationAccess') }, { key: 'camera' as const, icon: Camera, title: t(language, 'diagnoseCrop'), text: t(language, 'cameraAccess') }, { key: 'notifications' as const, icon: Bell, title: t(language, 'permissions'), text: notificationPermission === 'denied' ? 'Browser notifications are blocked. Change this site’s permission in your browser settings.' : notificationPermission === 'unsupported' ? 'This browser does not support desktop notifications.' : t(language, 'notificationAccess') }]; return <><div className="welcome"><div><span className="eyebrow">{t(language, 'permissions').toUpperCase()}</span><h1>{t(language, 'permissionsTitle')}</h1><p>{t(language, 'permissionsHelp')}</p></div><ShieldCheck className="hero-shield"/></div><div className="permission-card">{items.map(item => <div className="permission-row" key={item.key}><span className="permission-icon"><item.icon size={20}/></span><div><strong>{item.title}</strong><p>{item.text}</p></div>{item.key === 'notifications' ? <button className={`toggle ${state.notifications ? 'on' : ''}`} disabled={notificationPermission === 'denied' || notificationPermission === 'unsupported'} onClick={onRequestNotifications} aria-label={state.notifications ? 'Browser notifications enabled' : 'Enable browser notifications'}><span/></button> : <span className="permission-status">{item.key === 'camera' ? 'Used only when you choose a crop photo' : 'Not requested'}</span>}</div>)}<div className="privacy-box"><ShieldCheck size={18}/><span><strong>{t(language, 'privacyNotice')}</strong><br/><small>{t(language, 'privacyNotice')}</small></span></div></div></> }
 
-function Onboarding({ profile, authName, language: uiLanguage, onClose, onSaved }: { profile?: Profile | null; authName?: string; language: string; onClose: () => void; onSaved: (p: Profile, synced: boolean) => void }) {
+function Onboarding({ profile, farmId, authName, language: uiLanguage, onClose, onSaved }: { profile?: Profile | null; farmId?: string; authName?: string; language: string; onClose: () => void; onSaved: (p: Profile, synced: boolean, farmId?: string) => void }) {
   const [form, setForm] = useState({ farmer_name: authName || profile?.farmer_name || '', farm_name: profile?.farm_name || '', farm_type: profile?.farm_type || 'crops', field_name: profile?.fields?.[0]?.name || 'Main field', village: profile?.location.village || '', state: profile?.location.state || '', latitude: String(profile?.location.latitude ?? ''), longitude: String(profile?.location.longitude ?? ''), area: String(profile?.land_area_acres || ''), crop: profile?.crops[0] || 'Groundnut', variety: profile?.crop_variety || '', sowing_date: profile?.sowing_date || '', growth_stage: profile?.growth_stage || '', previous_crop: profile?.previous_crop || '', language: uiLanguage || profile?.preferred_language || 'en', soil_type: profile?.soil_type || '', irrigation: profile?.irrigation || 'Rain-fed' })
   useEffect(() => { if (authName) setForm(current => ({ ...current, farmer_name: authName })) }, [authName])
   const [animals, setAnimals] = useState((profile?.livestock || []).map(group => ({ species: group.species, count: String(group.count), breed: group.breed || '', purpose: group.purpose || '' })))
   const [locationMessage, setLocationMessage] = useState('Set your farm location: search your village/town or use this device’s location. No default location is set.')
   const [searchingLocation, setSearchingLocation] = useState(false)
+  const [resolvingDeviceLocation, setResolvingDeviceLocation] = useState(false)
   const [locationResults, setLocationResults] = useState<{ name: string; admin1: string; country: string; latitude: number; longitude: number }[]>([])
   const [locationInput, setLocationInput] = useState(profile?.location.village || '')
   const [locationSelected, setLocationSelected] = useState(!!profile?.location.latitude && !!profile?.location.longitude)
@@ -382,9 +419,27 @@ function Onboarding({ profile, authName, language: uiLanguage, onClose, onSaved 
   }, [locationInput, locationSelected, uiLanguage])
   const useDeviceLocation = () => {
     if (!navigator.geolocation) { setLocationMessage(t(uiLanguage, 'noLocation')); return }
-    navigator.geolocation.getCurrentPosition(position => {
-      setLocationResults([]); setLocationInput(''); setLocationSelected(true); setForm(current => ({ ...current, village: '', state: '', latitude: String(position.coords.latitude), longitude: String(position.coords.longitude) })); setLocationMessage('Device coordinates added. Add your village/town and state if you want them shown on the dashboard.')
-    }, () => setLocationMessage('Could not access device location. Allow location access in your browser, use HTTPS/localhost, or search your village.'), { timeout: 10000 })
+    setResolvingDeviceLocation(true)
+    setLocationMessage('Getting device location and finding the nearest place…')
+    navigator.geolocation.getCurrentPosition(async position => {
+      const { latitude, longitude } = position.coords
+      setLocationResults([]); setLocationSelected(true)
+      setForm(current => ({ ...current, village: '', latitude: String(latitude), longitude: String(longitude) }))
+      try {
+        const place = await api.reverseGeocode(latitude, longitude)
+        if (place.name) {
+          setLocationInput(place.name)
+          setForm(current => ({ ...current, village: place.name, state: place.state || current.state, latitude: String(latitude), longitude: String(longitude) }))
+          setLocationMessage(`Location found: ${place.name}${place.state ? `, ${place.state}` : ''}. You can edit the place name or state.`)
+        } else {
+          setLocationInput('')
+          setLocationMessage('Coordinates added. We could not find a place name here; enter your village/town and state if you want them shown.')
+        }
+      } catch {
+        setLocationInput('')
+        setLocationMessage('Coordinates added, but place-name lookup is unavailable. Enter your village/town and state if you want them shown.')
+      } finally { setResolvingDeviceLocation(false) }
+    }, () => { setResolvingDeviceLocation(false); setLocationMessage('Could not access device location. Allow location access in your browser, use HTTPS/localhost, or search your village.') }, { timeout: 10000 })
   }
   const selectLocation = (place: typeof locationResults[number]) => {
     setLocationInput(place.name); setLocationSelected(true)
@@ -398,11 +453,11 @@ function Onboarding({ profile, authName, language: uiLanguage, onClose, onSaved 
     const acres = hasCrops ? Number(form.area) : 0
     const field = hasCrops ? [{ name: form.field_name, area_acres: acres, crop: form.crop, crop_variety: form.variety || undefined, sowing_date: form.sowing_date || undefined, growth_stage: form.growth_stage || undefined, irrigation: form.irrigation, soil_type: form.soil_type || undefined }] : []
     const p: Profile = { farmer_name: form.farmer_name, farm_name: form.farm_name, farm_type: form.farm_type as 'crops'|'livestock'|'mixed', location: { latitude: lat, longitude: lon, village: form.village, state: form.state }, land_area_acres: acres, crops: hasCrops ? [form.crop] : [], fields: field, livestock: groups, crop_variety: form.variety || undefined, sowing_date: form.sowing_date || undefined, growth_stage: form.growth_stage || undefined, previous_crop: form.previous_crop || undefined, preferred_language: form.language, soil_type: form.soil_type || undefined, irrigation: form.irrigation }
-    const saved = await api.onboarding(p); if (saved.saved) onSaved(p, saved.synced)
+    const saved = await api.onboarding(p, farmId); if (saved.saved) onSaved(p, saved.synced, saved.farmId)
   }
   return <div className="modal-backdrop"><div className="modal onboarding"><div className="modal-heading"><div><span className="eyebrow">YOUR FARM PROFILE</span><h2>{t(uiLanguage, "farmSetup")}</h2><p>{t(uiLanguage, "farmHelp")}</p></div><button onClick={onClose} className="close-button"><X size={19}/></button></div><form onSubmit={submit}>
-    <div className="form-grid"><label>{t(uiLanguage, "farmerName")}<input required value={form.farmer_name} onChange={e => update('farmer_name', e.target.value)} placeholder="Your account name"/></label><label>{t(uiLanguage, "farmName")}<input value={form.farm_name} onChange={e => update('farm_name', e.target.value)} placeholder="e.g. Green Valley Farm"/></label><label>{t(uiLanguage, "farmType")}<select value={form.farm_type} onChange={e => update('farm_type', e.target.value)}><option value="crops">{t(uiLanguage, "crops")}</option><option value="livestock">{t(uiLanguage, "livestock")}</option><option value="mixed">{t(uiLanguage, "mixed")}</option></select></label><label>{t(uiLanguage, "preferredLanguage")}<select value={form.language} onChange={e => update('language', e.target.value)}>{languages.map(item => <option key={item.code} value={item.code}>{item.label}</option>)}</select></label>{form.farm_type !== 'livestock' && <><label>{t(uiLanguage, "fieldName")}<input value={form.field_name} onChange={e => update('field_name', e.target.value)} placeholder="Main field"/></label><label>{t(uiLanguage, "cropArea")}<input type="number" min="0.1" step="0.1" required value={form.area} onChange={e => update('area', e.target.value)} placeholder="2"/></label><label>{t(uiLanguage, "mainCrop")}<select value={form.crop} onChange={e => update('crop', e.target.value)}><option>Groundnut</option><option>Cotton</option><option>Soybean</option><option>Wheat</option><option>Rice</option><option>Vegetables</option></select></label><label>{t(uiLanguage, "variety")}<input value={form.variety} onChange={e => update('variety', e.target.value)} placeholder="Optional"/></label><label>{t(uiLanguage, "sowingDate")}<input type="date" value={form.sowing_date} onChange={e => update('sowing_date', e.target.value)}/></label><label>{t(uiLanguage, "growthStage")}<input value={form.growth_stage} onChange={e => update('growth_stage', e.target.value)} placeholder="e.g. flowering"/></label><label>{t(uiLanguage, "previousCrop")}<input value={form.previous_crop} onChange={e => update('previous_crop', e.target.value)} placeholder="Optional"/></label><label>{t(uiLanguage, "soilKnown")}<input value={form.soil_type} onChange={e => update('soil_type', e.target.value)} placeholder="Optional"/></label><label>{t(uiLanguage, "irrigation")}<select value={form.irrigation} onChange={e => update('irrigation', e.target.value)}><option>Rain-fed</option><option>Drip</option><option>Sprinkler</option><option>Canal</option><option>Other</option></select></label></>}</div>
-    <section className="farm-location"><div className="farm-location-heading"><MapPin size={18}/><div><strong>Farm location</strong><small>Search your village or town and select the right result.</small></div></div><div className="location-search-row"><input aria-label="Search village or town" role="combobox" aria-autocomplete="list" aria-expanded={locationResults.length > 0} aria-controls="farm-location-results" value={locationInput} onChange={e => { const value = e.target.value; setLocationInput(value); setLocationSelected(false); setForm(current => ({ ...current, village: value, state: '', latitude: '', longitude: '' })); setLocationResults([]) }} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); if (locationResults[0]) selectLocation(locationResults[0]) } }} placeholder="Start typing a village, town or PIN code"/><button type="button" className="secondary-button" onClick={useDeviceLocation}>{t(uiLanguage, "deviceLocation")}</button>{searchingLocation && <small className="location-loading" role="status">Searching places…</small>}</div>{locationResults.length > 0 && <div id="farm-location-results" className="place-results" role="listbox" aria-label="Matching places">{locationResults.map((place, index) => <button type="button" role="option" aria-selected="false" className="place-option" key={`${place.latitude}-${place.longitude}-${index}`} onClick={() => selectLocation(place)}><MapPin size={16}/><span><strong>{place.name}</strong><small>{[place.admin1, place.country].filter(Boolean).join(', ')}</small></span><ChevronRight size={16}/></button>)}</div>}{form.latitude && form.longitude && <div className="selected-location"><Check size={16}/><span><strong>{form.village || 'Location pin selected'}</strong><small>{form.state || 'State not set'} · {Number(form.latitude).toFixed(4)}, {Number(form.longitude).toFixed(4)}</small></span></div>}<label className="state-field">State / union territory<input value={form.state} onChange={e => update('state', e.target.value)} placeholder="Filled from place search; edit if needed"/></label><details className="manual-location"><summary>Enter coordinates manually</summary><div className="form-grid"><label>{t(uiLanguage, "latitude")}<input type="number" step="any" value={form.latitude} onChange={e => update('latitude', e.target.value)} placeholder="Latitude"/></label><label>{t(uiLanguage, "longitude")}<input type="number" step="any" value={form.longitude} onChange={e => update('longitude', e.target.value)} placeholder="Longitude"/></label></div></details><p className="location-message" role="status">{locationMessage}</p></section>
+    <div className="form-grid"><label>{t(uiLanguage, "farmerName")}<input required value={form.farmer_name} onChange={e => update('farmer_name', e.target.value)} placeholder="Your account name"/></label><label>{t(uiLanguage, "farmName")}<input value={form.farm_name} onChange={e => update('farm_name', e.target.value)} placeholder="e.g. Green Valley Farm"/></label><label>{t(uiLanguage, "farmType")}<select value={form.farm_type} onChange={e => update('farm_type', e.target.value)}><option value="crops">{t(uiLanguage, "crops")}</option><option value="livestock">{t(uiLanguage, "livestock")}</option><option value="mixed">{t(uiLanguage, "mixed")}</option></select></label><label>{t(uiLanguage, "preferredLanguage")}<select value={form.language} onChange={e => update('language', e.target.value)}>{languages.map(item => <option key={item.code} value={item.code}>{item.label}</option>)}</select></label>{form.farm_type !== 'livestock' && <><label>{t(uiLanguage, "fieldName")}<input value={form.field_name} onChange={e => update('field_name', e.target.value)} placeholder="Main field"/></label><label>{t(uiLanguage, "cropArea")}<input type="number" min="0.1" step="0.1" required value={form.area} onChange={e => update('area', e.target.value)} placeholder="2"/></label><label>{t(uiLanguage, "mainCrop")}<input required list="indian-crop-options" value={form.crop} onChange={e => update('crop', e.target.value)} placeholder="Search or type a crop" autoComplete="off"/><datalist id="indian-crop-options">{INDIAN_CROPS.map(crop => <option key={crop} value={crop}/>)}</datalist><small className="field-hint">Start typing to search, or enter a crop name.</small></label><label>{t(uiLanguage, "variety")}<input value={form.variety} onChange={e => update('variety', e.target.value)} placeholder="Optional"/></label><label>{t(uiLanguage, "sowingDate")}<input type="date" value={form.sowing_date} onChange={e => update('sowing_date', e.target.value)}/></label><label>{t(uiLanguage, "growthStage")}<input value={form.growth_stage} onChange={e => update('growth_stage', e.target.value)} placeholder="e.g. flowering"/></label><label>{t(uiLanguage, "previousCrop")}<input value={form.previous_crop} onChange={e => update('previous_crop', e.target.value)} placeholder="Optional"/></label><label>{t(uiLanguage, "soilKnown")}<input value={form.soil_type} onChange={e => update('soil_type', e.target.value)} placeholder="Optional"/></label><label>{t(uiLanguage, "irrigation")}<select value={form.irrigation} onChange={e => update('irrigation', e.target.value)}><option>Rain-fed</option><option>Drip</option><option>Sprinkler</option><option>Canal</option><option>Other</option></select></label></>}</div>
+    <section className="farm-location"><div className="farm-location-heading"><MapPin size={18}/><div><strong>Farm location</strong><small>Search your village or town and select the right result.</small></div></div><div className="location-search-row"><input aria-label="Search village or town" role="combobox" aria-autocomplete="list" aria-expanded={locationResults.length > 0} aria-controls="farm-location-results" value={locationInput} onChange={e => { const value = e.target.value; setLocationInput(value); setLocationSelected(false); setForm(current => ({ ...current, village: value, state: '', latitude: '', longitude: '' })); setLocationResults([]) }} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); if (locationResults[0]) selectLocation(locationResults[0]) } }} placeholder="Start typing a village, town or PIN code"/><button type="button" className="secondary-button" onClick={useDeviceLocation} disabled={resolvingDeviceLocation}>{resolvingDeviceLocation ? 'Finding place…' : t(uiLanguage, "deviceLocation")}</button>{searchingLocation && <small className="location-loading" role="status">Searching places…</small>}</div>{locationResults.length > 0 && <div id="farm-location-results" className="place-results" role="listbox" aria-label="Matching places">{locationResults.map((place, index) => <button type="button" role="option" aria-selected="false" className="place-option" key={`${place.latitude}-${place.longitude}-${index}`} onClick={() => selectLocation(place)}><MapPin size={16}/><span><strong>{place.name}</strong><small>{[place.admin1, place.country].filter(Boolean).join(', ')}</small></span><ChevronRight size={16}/></button>)}</div>}{form.latitude && form.longitude && <div className="selected-location"><Check size={16}/><span><strong>{form.village || 'Location pin selected'}</strong><small>{form.state || 'State not set'} · {Number(form.latitude).toFixed(4)}, {Number(form.longitude).toFixed(4)}</small></span></div>}<label className="state-field">State / union territory<input value={form.state} onChange={e => update('state', e.target.value)} placeholder="Filled from place search; edit if needed"/></label><details className="manual-location"><summary>Enter coordinates manually</summary><div className="form-grid"><label>{t(uiLanguage, "latitude")}<input type="number" step="any" value={form.latitude} onChange={e => update('latitude', e.target.value)} placeholder="Latitude"/></label><label>{t(uiLanguage, "longitude")}<input type="number" step="any" value={form.longitude} onChange={e => update('longitude', e.target.value)} placeholder="Longitude"/></label></div></details><p className="location-message" role="status">{locationMessage}</p><small className="field-hint">Place names are approximate · © OpenStreetMap contributors. Please verify before saving.</small></section>
     {form.farm_type !== 'crops' && <div className="animal-editor"><div className="animal-editor-title"><strong>{t(uiLanguage, "animalsHere")}</strong><button type="button" className="secondary-button" onClick={() => setAnimals(current => [...current, { species: 'cattle', count: '1', breed: '', purpose: '' }])}>{t(uiLanguage, "addGroup")}</button></div>{animals.length === 0 && <small>Add an animal group to continue.</small>}{animals.map((group, index) => <div className="animal-row" key={index}><select aria-label="Animal type" value={group.species} onChange={e => setAnimals(current => current.map((item, i) => i === index ? { ...item, species: e.target.value as typeof item.species } : item))}><option value="cattle">Cattle</option><option value="buffalo">Buffalo</option><option value="goat">Goats</option><option value="sheep">Sheep</option><option value="poultry">Poultry</option><option value="pig">Pigs</option><option value="other">Other</option></select><input aria-label="Animal count" type="number" min="1" value={group.count} onChange={e => setAnimals(current => current.map((item, i) => i === index ? { ...item, count: e.target.value } : item))} placeholder={t(uiLanguage, "animalCount")}/><input aria-label="Breed, optional" value={group.breed} onChange={e => setAnimals(current => current.map((item, i) => i === index ? { ...item, breed: e.target.value } : item))} placeholder={t(uiLanguage, "breedOptional")}/><select aria-label="Animal purpose" value={group.purpose} onChange={e => setAnimals(current => current.map((item, i) => i === index ? { ...item, purpose: e.target.value as typeof item.purpose } : item))}><option value="dairy">Dairy</option><option value="meat">Meat</option><option value="eggs">Eggs</option><option value="breeding">Breeding</option><option value="working">Work</option><option value="other">Other</option></select><button type="button" className="text-button" aria-label="Remove animal group" onClick={() => setAnimals(current => current.filter((_, i) => i !== index))}>Remove</button></div>)}</div>}
     <div className="form-actions"><button type="button" className="secondary-button" onClick={onClose}>{t(uiLanguage, "cancel")}</button><button className="primary-button" type="submit">{t(uiLanguage, "saveFarm")} <ArrowRight size={16}/></button></div></form></div></div>
 }
@@ -534,7 +589,7 @@ function Assistant({ crop, language, onClose }: { crop?: string; language: strin
     setPhotoError('')
     if (!file) return
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { setPhotoError('Choose a JPG, PNG, or WebP crop photo.'); return }
-    if (file.size > 4 * 1024 * 1024) { setPhotoError('Crop photos must be 4 MB or smaller.'); return }
+    if (file.size > MAX_CROP_PHOTO_BYTES) { setPhotoError('This photo is over 15 MB. Please choose a smaller photo (15 MB or less).'); return }
     const url = URL.createObjectURL(file)
     previewUrls.current.push(url)
     setPhoto({ file, url })
@@ -550,12 +605,7 @@ function Assistant({ crop, language, onClose }: { crop?: string; language: strin
     setLoading(true)
     try {
       if (image) {
-        const imageData = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader()
-          reader.onload = () => resolve(String(reader.result))
-          reader.onerror = () => reject(new Error('Could not read the selected crop photo.'))
-          reader.readAsDataURL(image.file)
-        })
+        const imageData = await compressCropPhoto(image.file)
         const result = await api.diagnose(submittedQuestion, crop, imageData, undefined, language)
         setMessages(current => current.map((message, index) => index === messageIndex ? { ...message, diagnosis: result } : message))
         setDiagnosisContext(result)
@@ -580,7 +630,34 @@ function Assistant({ crop, language, onClose }: { crop?: string; language: strin
     } finally { setLoading(false) }
   }
   const ask = (e: React.FormEvent) => { e.preventDefault(); void sendQuestion(question, photo) }
-  return <div className="assistant-panel"><div className="assistant-head"><div><span className="assistant-avatar"><Bot size={20}/></span><div><strong>{t(language, 'askAI')}</strong><small>{t(language, 'preferredLanguage')}</small></div></div><button onClick={onClose}><X size={19}/></button></div><div className="assistant-body"><div className="bot-message"><span className="assistant-avatar tiny"><Bot size={15}/></span><p>{t(language, 'assistantGreeting')}</p></div>{messages.map((message, index) => <div className="conversation-turn" key={`${index}-${message.question}`}><div className="question-bubble">{message.photoUrl && <img className="chat-crop-photo" src={message.photoUrl} alt="Crop photo sent for diagnosis"/>}{message.question}</div>{message.diagnosis && <div className="answer-row"><span className="assistant-avatar tiny"><Leaf size={14}/></span><div className="assistant-reply diagnosis-chat-result"><strong>Crop assessment · {message.diagnosis.severity} attention</strong><p>{message.diagnosis.diagnosis}</p>{message.diagnosis.confidence != null && <small>{Math.round(message.diagnosis.confidence * 100)}% confidence · {message.diagnosis.source}</small>}{message.diagnosis.actions.length > 0 && <ul>{message.diagnosis.actions.slice(0, 5).map((action, actionIndex) => <li key={actionIndex}>{action}</li>)}</ul>}</div></div>}{message.answer ? <div className="answer-row"><span className="assistant-avatar tiny"><Bot size={15}/></span><div className="assistant-reply"><AssistantText text={message.answer}/><small className="answer-source">{message.source === 'unavailable' ? 'AI unavailable' : message.source === 'mock-fallback' || message.source === 'mock' ? 'Demo fallback advice' : message.source === 'gemini-fallback' ? 'Answered by Gemini API fallback' : `Answered by ${message.source}`}</small></div></div> : loading && index === messages.length - 1 ? <div className="answer-row"><span className="assistant-avatar tiny"><Bot size={15}/></span><div className="assistant-reply pending-reply">{t(language, 'thinking')}</div></div> : null}</div>)}{messages.length === 0 && <div className="suggestions"><button type="button" disabled={loading} onClick={() => void sendQuestion(t(language, 'irrigationQuestion'))}>{t(language, 'irrigationQuestion')}</button><button type="button" disabled={loading} onClick={() => void sendQuestion(t(language, 'improveSoilQuestion'))}>{t(language, 'improveSoilQuestion')}</button></div>}<div ref={conversationEnd}/></div>{photoError && <div className="chat-upload-error" role="status">{photoError}</div>}<form className="assistant-input" onSubmit={ask}>{photo && <div className="chat-photo-pending"><img src={photo.url} alt="Selected crop"/><span>{photo.file.name}</span><button type="button" aria-label="Remove crop photo" onClick={() => setPhoto(undefined)}><X size={15}/></button></div>}<input value={question} onChange={e => setQuestion(e.target.value)} placeholder={loading ? t(language, 'thinking') : t(language, 'questionPlaceholder')} /><button type="button" className="chat-attach-button" onClick={() => cameraInput.current?.click()} disabled={loading} aria-label={t(language, 'takePhoto')} title={t(language, 'takePhoto')}><Camera size={17}/></button><button type="button" className="chat-attach-button" onClick={() => uploadInput.current?.click()} disabled={loading} aria-label={t(language, 'uploadAttachment')} title={t(language, 'uploadAttachment')}><Upload size={17}/></button><VoiceInputButton language={language} onTranscript={value => setQuestion(current => `${current.trim()}${current.trim() ? ' ' : ''}${value}`)}/><button aria-label="Send question" disabled={loading || (!question.trim() && !photo)}><ArrowRight size={17}/></button><input ref={cameraInput} className="chat-file-input" type="file" accept="image/png,image/jpeg,image/webp" capture="environment" onChange={e => { choosePhoto(e.target.files?.[0]); e.currentTarget.value = '' }}/><input ref={uploadInput} className="chat-file-input" type="file" accept="image/png,image/jpeg,image/webp" onChange={e => { choosePhoto(e.target.files?.[0]); e.currentTarget.value = '' }}/></form></div>
+  return <div className="assistant-panel"><div className="assistant-head"><div><span className="assistant-avatar"><Bot size={20}/></span><div><strong>{t(language, 'askAI')}</strong><small>{t(language, 'preferredLanguage')}</small></div></div><button onClick={onClose}><X size={19}/></button></div><div className="assistant-body"><div className="bot-message"><span className="assistant-avatar tiny"><Bot size={15}/></span><p>{t(language, 'assistantGreeting')}</p></div>{messages.map((message, index) => <div className="conversation-turn" key={`${index}-${message.question}`}><div className="question-bubble">{message.photoUrl && <img className="chat-crop-photo" src={message.photoUrl} alt="Crop photo sent for diagnosis"/>}{message.question}</div>{message.diagnosis && <div className="answer-row"><span className="assistant-avatar tiny"><Leaf size={14}/></span><div className="assistant-reply diagnosis-chat-result"><strong>Crop assessment · {message.diagnosis.severity} attention</strong><p>{message.diagnosis.diagnosis}</p>{message.diagnosis.confidence != null && <small>{Math.round(message.diagnosis.confidence * 100)}% confidence · {message.diagnosis.source}</small>}{message.diagnosis.actions.length > 0 && <ul>{message.diagnosis.actions.slice(0, 5).map((action, actionIndex) => <li key={actionIndex}>{action}</li>)}</ul>}</div></div>}{message.answer ? <div className="answer-row"><span className="assistant-avatar tiny"><Bot size={15}/></span><div className="assistant-reply"><AssistantText text={message.answer}/><small className="answer-source">{message.source === 'unavailable' ? 'AI unavailable' : message.source === 'mock-fallback' || message.source === 'mock' ? 'Demo fallback advice' : message.source === 'gemini-fallback' ? 'Answered by Gemini API fallback' : `Answered by ${message.source}`}</small></div></div> : loading && index === messages.length - 1 ? <div className="answer-row"><span className="assistant-avatar tiny"><Bot size={15}/></span><div className="assistant-reply pending-reply">{t(language, 'thinking')}</div></div> : null}</div>)}{messages.length === 0 && <div className="suggestions"><button type="button" disabled={loading} onClick={() => void sendQuestion(t(language, 'irrigationQuestion'))}>{t(language, 'irrigationQuestion')}</button><button type="button" disabled={loading} onClick={() => void sendQuestion(t(language, 'improveSoilQuestion'))}>{t(language, 'improveSoilQuestion')}</button></div>}<div ref={conversationEnd}/></div>{photoError && <div className="chat-upload-error" role="status">{photoError}</div>}<form className="assistant-input" onSubmit={ask}>{photo && <div className="chat-photo-pending"><img src={photo.url} alt="Selected crop"/><span>{photo.file.name}</span><button type="button" aria-label="Remove crop photo" onClick={() => setPhoto(undefined)}><X size={15}/></button></div>}<input value={question} onChange={e => setQuestion(e.target.value)} placeholder={loading ? t(language, 'thinking') : t(language, 'questionPlaceholder')} /><button type="button" className="chat-attach-button" onClick={() => cameraInput.current?.click()} disabled={loading} aria-label={t(language, 'takePhoto')} title={`${t(language, 'takePhoto')} · up to 15 MB`}><Camera size={17}/></button><button type="button" className="chat-attach-button" onClick={() => uploadInput.current?.click()} disabled={loading} aria-label={t(language, 'uploadAttachment')} title={`${t(language, 'uploadAttachment')} · up to 15 MB`}><Upload size={17}/></button><VoiceInputButton language={language} onTranscript={value => setQuestion(current => `${current.trim()}${current.trim() ? ' ' : ''}${value}`)}/><button aria-label="Send question" disabled={loading || (!question.trim() && !photo)}><ArrowRight size={17}/></button><small className="chat-upload-hint">Crop photos: 15 MB or smaller. Photos are compressed before upload.</small><input ref={cameraInput} className="chat-file-input" type="file" accept="image/png,image/jpeg,image/webp" capture="environment" onChange={e => { choosePhoto(e.target.files?.[0]); e.currentTarget.value = '' }}/><input ref={uploadInput} className="chat-file-input" type="file" accept="image/png,image/jpeg,image/webp" onChange={e => { choosePhoto(e.target.files?.[0]); e.currentTarget.value = '' }}/></form></div>
+}
+
+async function compressCropPhoto(file: File): Promise<string> {
+  const bitmap = await createImageBitmap(file)
+  try {
+    const scale = Math.min(1, 1920 / Math.max(bitmap.width, bitmap.height))
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale))
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale))
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('Your browser could not prepare this crop photo.')
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+    let quality = 0.84
+    let blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', quality))
+    while (blob && blob.size > MAX_DIAGNOSIS_IMAGE_BYTES && quality > 0.5) {
+      quality -= 0.1
+      blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', quality))
+    }
+    if (!blob) throw new Error('Your browser could not prepare this crop photo.')
+    if (blob.size > MAX_DIAGNOSIS_IMAGE_BYTES) throw new Error('This crop photo is still too large after compression. Please choose a smaller photo.')
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = () => reject(new Error('Could not read the selected crop photo.'))
+      reader.readAsDataURL(blob)
+    })
+  } finally { bitmap.close() }
 }
 
 function AssistantText({ text }: { text: string }) {

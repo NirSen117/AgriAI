@@ -196,7 +196,7 @@ class AdvisoryResponse(BaseModel):
 
 
 class DiagnosisRequest(BaseModel):
-    image_url: str | None = Field(default=None, max_length=6 * 1024 * 1024)
+    image_url: str | None = Field(default=None, max_length=5 * 1024 * 1024)
     document_url: str | None = Field(default=None, max_length=6 * 1024 * 1024)
     language: Literal["en", "hi", "kn", "ta", "te", "bn", "mr"] | None = None
     crop: str | None = None
@@ -219,8 +219,10 @@ class DiagnosisRequest(BaseModel):
                 raw = base64.b64decode(match.group(1), validate=True)
             except ValueError as exc:
                 raise ValueError(f"{kind} data is invalid.") from exc
-            if len(raw) > 4 * 1024 * 1024:
-                raise ValueError(f"{kind} must be 4 MB or smaller.")
+            max_bytes = 3 * 1024 * 1024 if kind == "Image" else 4 * 1024 * 1024
+            if len(raw) > max_bytes:
+                limit_mb = max_bytes // (1024 * 1024)
+                raise ValueError(f"{kind} must be {limit_mb} MB or smaller after upload compression.")
         if self.symptoms and len(self.symptoms) > 2000:
             raise ValueError("Symptoms text is too long.")
         return self

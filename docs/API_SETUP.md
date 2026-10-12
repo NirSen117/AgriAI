@@ -81,7 +81,9 @@ both live providers fail, Agro AI returns a deterministic mock response labeled
 
 The backend restricts CORS to configured frontend origins, applies API
 security headers, rejects oversized requests, validates image data URLs, and
-limits AI/diagnosis traffic per client IP. Set `AI_RATE_LIMIT_PER_MINUTE` and
+limits AI/diagnosis traffic per client IP. Crop photos are resized and JPEG
+compressed in the browser before upload; original files up to 15 MB are accepted
+and compressed to at most 3 MB. Set `AI_RATE_LIMIT_PER_MINUTE` and
 `MAX_REQUEST_BYTES` to adjust the local limits. These in-memory limits are
 single-process protections; use a shared rate-limit store behind a trusted
 proxy for a multi-instance deployment.

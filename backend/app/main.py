@@ -9,6 +9,7 @@ import re
 from threading import Lock
 from pathlib import Path
 from time import monotonic, time
+from time import sleep as sleep_seconds
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -44,6 +45,9 @@ _satellite_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bhuv
 _satellite_lock = Lock()
 _satellite_cache: dict[tuple[float, float], tuple[float, SatelliteObservation]] = {}
 _satellite_in_flight: set[tuple[float, float]] = set()
+_reverse_geocode_lock = Lock()
+_reverse_geocode_cache: dict[tuple[float, float], tuple[float, dict]] = {}
+_reverse_geocode_last_request = 0.0
 
 
 def _get_firebase_signing_certificates() -> dict[str, str]:
@@ -305,6 +309,48 @@ def geocode(q: str = Query(min_length=2, max_length=120)) -> dict:
         return {"results": [{"name": r.get("name", ""), "admin1": r.get("admin1", ""), "country": r.get("country", ""), "latitude": r["latitude"], "longitude": r["longitude"]} for r in payload.get("results", [])]}
     except Exception:
         return {"results": [], "unavailable": True}
+
+
+@app.get("/api/reverse-geocode", tags=["farm"])
+def reverse_geocode(latitude: float = Query(ge=-90, le=90), longitude: float = Query(ge=-180, le=180),
+                    _user_id: str = Depends(require_firebase_user)) -> dict:
+    """Resolve a user-selected device location to its nearest readable place name."""
+    global _reverse_geocode_last_request
+    from urllib.parse import urlencode
+    cache_key = (round(latitude, 4), round(longitude, 4))
+    cached = _reverse_geocode_cache.get(cache_key)
+    if cached and monotonic() - cached[0] < 86400:
+        return cached[1]
+    try:
+        # Nominatim's public service allows at most one request per second.
+        # This app only reverse-geocodes after an explicit device-location click.
+        with _reverse_geocode_lock:
+            cached = _reverse_geocode_cache.get(cache_key)
+            if cached and monotonic() - cached[0] < 86400:
+                return cached[1]
+            wait = 1.0 - (monotonic() - _reverse_geocode_last_request)
+            if wait > 0:
+                sleep_seconds(wait)
+            _reverse_geocode_last_request = monotonic()
+        url = settings.reverse_geocode_url + "?" + urlencode({
+            "lat": latitude, "lon": longitude, "format": "jsonv2", "addressdetails": 1,
+            "zoom": 10, "accept-language": "en",
+        })
+        request = Request(url, headers={"Accept": "application/json", "User-Agent": "AgroAI/1.0 (farm location lookup)"})
+        with urlopen(request, timeout=settings.http_timeout_seconds) as response:
+            payload = json.load(response)
+        address = payload.get("address") or {}
+        name = next((address.get(key) for key in (
+            "village", "town", "city", "municipality", "suburb", "county", "hamlet", "state_district",
+        ) if address.get(key)), "")
+        state = address.get("state") or address.get("region") or ""
+        if not name:
+            name = payload.get("name") or payload.get("display_name", "").split(",", 1)[0]
+        result = {"name": name, "state": state, "country": address.get("country", ""), "latitude": latitude, "longitude": longitude}
+        _reverse_geocode_cache[cache_key] = (monotonic(), result)
+        return result
+    except Exception:
+        return {"name": "", "state": "", "unavailable": True}
 
 
 def _location(profile: FarmProfile | None) -> Location:

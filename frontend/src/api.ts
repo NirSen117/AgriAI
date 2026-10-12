@@ -1,12 +1,13 @@
 import { firebaseAuth } from './firebaseAuth'
-import { loadFarmProfile, saveFarmProfile, saveFarmProfileIfMissing } from './farmStore'
+import { activateFarm, loadFarmProfiles, saveFarmProfile, saveFarmProfileIfMissing } from './farmStore'
+import type { FarmEntry } from './farmStore'
 
 export type Location = { latitude: number; longitude: number; village?: string; state?: string }
 export type FarmType = 'crops' | 'livestock' | 'mixed'
 export type LivestockGroup = { species: 'cattle'|'buffalo'|'goat'|'sheep'|'poultry'|'pig'|'other'; count: number; breed?: string; purpose?: string }
 export type FarmField = { name: string; area_acres: number; crop: string; crop_variety?: string; sowing_date?: string; growth_stage?: string; irrigation?: string; soil_type?: string }
 export type Profile = { farmer_name: string; farm_name?: string; location: Location; farm_type?: FarmType; land_area_acres: number; soil_type?: string; irrigation?: string; crops: string[]; fields?: FarmField[]; livestock?: LivestockGroup[]; preferred_language?: string; crop_variety?: string; sowing_date?: string; growth_stage?: string; previous_crop?: string }
-export type Dashboard = { profile: Profile | null; profile_sync?: 'synced' | 'unavailable'; weather: { temperature_c: number; humidity_percent: number; rainfall_mm: number; rainfall_probability: number; wind_kph: number; source: string }; soil: { ph?: number | null; moisture_percent?: number | null; nitrogen_index?: number | null; organic_carbon_percent?: number | null; source: string }; satellite: { ndvi?: number | null; crop_health: 'poor'|'fair'|'good'|'excellent'|'unavailable'; land_cover?: { code: string; label: string; area_sq_km: number; share_percent: number }[]; cloud_cover_percent?: number | null; observed_at?: string; availability_message?: string | null; source: string }; data_quality: string }
+export type Dashboard = { profile: Profile | null; profile_sync?: 'synced' | 'unavailable'; farms?: FarmEntry[]; active_farm_id?: string; weather: { temperature_c: number; humidity_percent: number; rainfall_mm: number; rainfall_probability: number; wind_kph: number; source: string }; soil: { ph?: number | null; moisture_percent?: number | null; nitrogen_index?: number | null; organic_carbon_percent?: number | null; source: string }; satellite: { ndvi?: number | null; crop_health: 'poor'|'fair'|'good'|'excellent'|'unavailable'; land_cover?: { code: string; label: string; area_sq_km: number; share_percent: number }[]; cloud_cover_percent?: number | null; observed_at?: string; availability_message?: string | null; source: string }; data_quality: string }
 export type Advisory = { summary: string; items: { priority: 'high'|'medium'|'low'; title: string; action: string; reason: string }[]; source: string }
 export type Diagnosis = { diagnosis: string; confidence?: number | null; severity: 'low'|'medium'|'high'; actions: string[]; source: string }
 export type Interoperability = {
@@ -90,9 +91,16 @@ export const api = {
     const uid = firebaseAuth.currentUser()?.uid
     const cached = localProfile(uid)
     let sharedProfile: Profile | null = null
+    let farms: FarmEntry[] = []
+    let activeFarmId: string | undefined
     let firestoreAvailable = false
     if (uid) {
-      try { sharedProfile = await loadFarmProfile(uid); firestoreAvailable = true }
+      try {
+        const farmCollection = await loadFarmProfiles(uid)
+        farms = farmCollection.farms; activeFarmId = farmCollection.activeFarmId
+        sharedProfile = farms.find(farm => farm.id === activeFarmId)?.profile || null
+        firestoreAvailable = true
+      }
       catch { /* Preserve local/legacy behavior while Firestore is not yet configured. */ }
     }
     let dashboard: Dashboard
@@ -108,6 +116,8 @@ export const api = {
       if (existing) {
         try {
           sharedProfile = await saveFarmProfileIfMissing(uid, existing)
+          const farmCollection = await loadFarmProfiles(uid)
+          farms = farmCollection.farms; activeFarmId = farmCollection.activeFarmId
           localStorage.setItem(profileKey(uid), JSON.stringify(sharedProfile))
           if (JSON.stringify(sharedProfile) !== JSON.stringify(dashboard.profile)) {
             await request('/onboarding', { method: 'POST', body: JSON.stringify(sharedProfile) })
@@ -117,7 +127,11 @@ export const api = {
       }
     }
     const farmProfile = sharedProfile || dashboard.profile || cached
-    dashboard = { ...dashboard, profile: farmProfile, profile_sync: firestoreAvailable ? 'synced' : 'unavailable' }
+    if (farmProfile && !farms.length) {
+      farms = [{ id: 'local', profile: farmProfile }]
+      activeFarmId = 'local'
+    }
+    dashboard = { ...dashboard, profile: farmProfile, profile_sync: firestoreAvailable ? 'synced' : 'unavailable', farms, active_farm_id: activeFarmId }
     if (dashboard.weather.source === 'mock-weather' || dashboard.weather.source === 'unavailable') {
       if (farmProfile) {
         try { dashboard = { ...dashboard, profile: farmProfile, weather: await liveWeather(farmProfile.location) } }
@@ -127,14 +141,23 @@ export const api = {
     return dashboard
   },
   advisory: () => request<Advisory>('/advisory', undefined, advisory),
-  onboarding: async (profile: Profile) => {
+  onboarding: async (profile: Profile, farmId?: string) => {
     const uid = firebaseAuth.currentUser()?.uid
     if (!uid) throw new Error('Sign in before saving your farm profile.')
     const result = await request<{ saved: boolean; profile: Profile }>('/onboarding', { method: 'POST', body: JSON.stringify(profile) })
     localStorage.setItem(profileKey(uid), JSON.stringify(profile))
     let synced = false
-    try { await saveFarmProfile(uid, profile); synced = true } catch { /* Tell the UI the save is device/backend-only until Firestore is ready. */ }
-    return { ...result, synced }
+    let savedFarmId = farmId
+    try { savedFarmId = await saveFarmProfile(uid, profile, farmId); synced = true } catch { /* Tell the UI the save is device/backend-only until Firestore is ready. */ }
+    return { ...result, synced, farmId: savedFarmId }
+  },
+  activateFarm: async (farmId: string) => {
+    const uid = firebaseAuth.currentUser()?.uid
+    if (!uid) throw new Error('Sign in before switching farms.')
+    const profile = await activateFarm(uid, farmId)
+    await request('/onboarding', { method: 'POST', body: JSON.stringify(profile) })
+    localStorage.setItem(profileKey(uid), JSON.stringify(profile))
+    return profile
   },
   geocode: async (query: string, signal?: AbortSignal) => {
     let backendResults: { name: string; admin1: string; country: string; latitude: number; longitude: number }[] = []
@@ -150,6 +173,7 @@ export const api = {
       return { results, unavailable: results.length === 0 }
     } catch { return { results: [], unavailable: true } }
   },
+  reverseGeocode: async (latitude: number, longitude: number) => request<{ name: string; state: string; country: string; unavailable?: boolean }>(`/reverse-geocode?latitude=${encodeURIComponent(latitude)}&longitude=${encodeURIComponent(longitude)}`),
   ask: (question: string, crop?: string, language?: string) => request<{ answer: string; source: string }>('/ai/ask', { method: 'POST', body: JSON.stringify({ question, crop, language }) }),
   diagnose: (symptoms: string, crop?: string, image_url?: string, document_url?: string, language?: string) => request<Diagnosis>('/disease/analyze', { method: 'POST', body: JSON.stringify({ symptoms, crop, image_url, document_url, language }) }),
   permissions: () => request<{ location: boolean; camera: boolean; notifications: boolean; explanation: string }>('/permissions', undefined, { location: false, camera: false, notifications: false, explanation: 'Permissions are optional and only requested after your action.' }),

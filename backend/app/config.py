@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     vertex_ai_model: str = "gemini-3.5-flash"
     hf_token: str | None = None
     open_meteo_base_url: str = "https://api.open-meteo.com/v1/forecast"
+    reverse_geocode_url: str = "https://nominatim.openstreetmap.org/reverse"
     bhuvan_api_token: str | None = None
     # Bhuvan's AOI endpoint is published under lulc250k; the guessed 50K
     # endpoint path returns 404. The 50K layer remains available as public WMS.
@@ -32,7 +33,7 @@ class Settings(BaseSettings):
     http_timeout_seconds: float = 30.0
     database_path: str = "./data/agriai.db"
     ai_rate_limit_per_minute: int = 15
-    max_request_bytes: int = 7 * 1024 * 1024
+    max_request_bytes: int = 8 * 1024 * 1024
 
     @field_validator("gemini_api_key", "bhuvan_api_token", "data_gov_in_api_key", mode="before")
     @classmethod

@@ -5,10 +5,21 @@ service cloud.firestore {
       allow read: if request.auth != null && request.auth.uid == userId;
       allow create, update: if request.auth != null
                             && request.auth.uid == userId
+                            && request.resource.data.updatedAt == request.time
+                            && ((profileId == 'selection'
+                                  && request.resource.data.keys().hasOnly(['activeFarmId', 'updatedAt'])
+                                  && request.resource.data.activeFarmId is string)
+                                || (request.resource.data.keys().hasOnly(['profile', 'updatedAt'])
+                                    && request.resource.data.profile is map));
+      allow delete: if false;
+    }
+    match /users/{userId}/farms/{farmId} {
+      allow read, delete: if request.auth != null && request.auth.uid == userId;
+      allow create, update: if request.auth != null
+                            && request.auth.uid == userId
                             && request.resource.data.keys().hasOnly(['profile', 'updatedAt'])
                             && request.resource.data.profile is map
                             && request.resource.data.updatedAt == request.time;
-      allow delete: if false;
     }
     match /users/{userId}/diagnosisHistory/{entryId} {
       allow read, delete: if request.auth != null && request.auth.uid == userId;

@@ -166,6 +166,32 @@ function App() {
   }
   const editActiveFarm = () => { setOnboardingFarmId(activeFarmId || undefined); setShowOnboarding(true) }
   const addFarm = () => { setOnboardingFarmId(undefined); setShowOnboarding(true) }
+  const handleFarmSaved = async (savedProfile: Profile, synced: boolean, savedFarmId?: string) => {
+    setShowOnboarding(false)
+    setFarmAnalysis(undefined)
+    const farmId = savedFarmId || activeFarmId || 'local'
+    setActiveFarmId(farmId)
+    setFarms(current => {
+      const existing = current.some(farm => farm.id === farmId)
+      const updated = current.map(farm => farm.id === farmId ? { ...farm, profile: savedProfile } : farm)
+      return existing ? updated : [...updated, { id: farmId, profile: savedProfile }]
+    })
+    // Reflect the saved location immediately. The follow-up dashboard request
+    // refreshes weather/advice, but must not be required for the profile UI to update.
+    setDashboard(current => current ? { ...current, profile: savedProfile } : current)
+    setNotice(`${savedProfile.location.village || 'Farm location'} saved${!synced ? ' · Farm profile saved here but device sync needs Firestore access' : ''}`)
+    try {
+      const [nextDashboard, nextAdvice] = await Promise.all([api.dashboard(), api.advisory()])
+      setDashboard(nextDashboard)
+      setFarms(nextDashboard.farms || [])
+      setActiveFarmId(nextDashboard.active_farm_id || farmId)
+      setAdvice(nextAdvice)
+      setNotice(`${dataNotice(nextDashboard)}${!synced ? ' · Farm profile saved here but device sync needs Firestore access' : ''}`)
+    } catch {
+      // Keep the just-saved profile visible if refreshing live observations fails.
+      setNotice(`${savedProfile.location.village || 'Farm location'} saved · Live farm data could not refresh yet`)
+    }
+  }
   const switchFarm = async (farmId: string) => {
     const previousFarmId = activeFarmId
     const selected = farms.find(farm => farm.id === farmId)
@@ -210,7 +236,7 @@ function App() {
     </main>
     {mobileNavOpen && <button className="mobile-nav-backdrop" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)}/>}
     <div className="mobile-nav">{nav.filter(item => item.id !== 'permissions').map(item => <button className={page === item.id ? 'active' : ''} onClick={() => setPage(item.id)} key={item.id}><item.icon size={18}/><span>{item.key ? t(language, item.key) : item.id === 'markets' ? 'Markets' : item.label}</span></button>)}</div>
-    {showOnboarding && <Onboarding profile={onboardingFarmId ? farms.find(farm => farm.id === onboardingFarmId)?.profile || profile : undefined} farmId={onboardingFarmId} authName={authUser.displayName} language={language} onClose={() => setShowOnboarding(false)} onSaved={async (p, synced, savedFarmId) => { setShowOnboarding(false); setFarmAnalysis(undefined); if (savedFarmId) setActiveFarmId(savedFarmId); const [nextDashboard, nextAdvice] = await Promise.all([api.dashboard(), api.advisory()]); setDashboard(nextDashboard); setFarms(nextDashboard.farms || []); setActiveFarmId(nextDashboard.active_farm_id || savedFarmId || ''); setAdvice(nextAdvice); setNotice(`${dataNotice(nextDashboard)}${!synced ? ' · Farm profile saved here but device sync needs Firestore access' : ''}`) }} />}
+    {showOnboarding && <Onboarding profile={onboardingFarmId ? farms.find(farm => farm.id === onboardingFarmId)?.profile || profile : undefined} farmId={onboardingFarmId} authName={authUser.displayName} language={language} onClose={() => setShowOnboarding(false)} onSaved={handleFarmSaved} />}
     {diagnosis && <DiagnosisModal crop={profile?.crops[0]} language={language} onClose={() => setDiagnosis(false)} />}
     {assistant && <Assistant crop={profile?.crops[0]} language={language} onClose={() => setAssistant(false)} />}
     {!assistant && <button className="assistant-launcher" onClick={() => setAssistant(true)} aria-label="Ask Agro AI"><span className="launcher-icon"><Bot size={22}/></span><span>{t(language, 'askAI')}</span></button>}

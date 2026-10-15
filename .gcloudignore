@@ -8,6 +8,8 @@ backend/.venv/
 .venv/
 **/.agents/
 **/.codex/
+google-cloud-sdk/
+google-cloud-cli-linux-*.tar.gz
 **/__pycache__/
 **/*.py[cod]
 **/*.db

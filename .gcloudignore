@@ -10,6 +10,8 @@ backend/.venv/
 **/.codex/
 google-cloud-sdk/
 google-cloud-cli-linux-*.tar.gz
+docs/AGENT_HANDOFF.md
+docs/LOCAL_CHANGELOG.md
 **/__pycache__/
 **/*.py[cod]
 **/*.db

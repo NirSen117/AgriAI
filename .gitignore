@@ -16,3 +16,6 @@ data/*.db-*
 backend/data/*.db
 backend/data/*.db-*
 *.tsbuildinfo
+# Local-only project notes; do not publish these with source.
+docs/AGENT_HANDOFF.md
+docs/LOCAL_CHANGELOG.md
